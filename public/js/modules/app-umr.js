@@ -1,0 +1,1404 @@
+// ===== UMR (UMP/UMK) MODULE =====
+// Extracted from app.js for modular monolith architecture
+
+// ===== UMP / UMK MODULE =====
+
+let currentUmrType = 'UMP';
+let umrFilteredData = [];
+let umrCurrentPage = 1;
+const UMR_PER_PAGE = 10;
+
+function formatNominal(val) {
+    return new Intl.NumberFormat('id-ID').format(val || 0);
+}
+
+async function renderUmrTable() {
+    try {
+        const tipe = document.getElementById('selectUmrType')?.value || currentUmrType;
+        const year = document.getElementById('selectUmrYear')?.value || new Date().getFullYear();
+
+        // Show loading state
+        const tbody = document.getElementById('tabelUmrBody');
+        if (tbody) {
+            const colSpan = (tipe === 'UMP') ? 4 : 5;
+            tbody.innerHTML = `<tr><td colspan="${colSpan}" style="text-align: center; padding: 20px; color: #94a3b8;"><i class="fas fa-spinner fa-spin" style="margin-right: 8px;"></i>Loading data...</td></tr>`;
+        }
+
+        const response = await fetch(`${API_URL}/minimum-wages?tipe=${tipe}&year=${year}`);
+        umrAllData = await response.json();
+
+        currentUmrType = tipe;
+
+        const tabUmp = document.getElementById('tabUmp');
+        const tabUmk = document.getElementById('tabUmk');
+        const tabNominal = document.getElementById('tabNominal');
+        const tableArea = document.getElementById('umrTableArea');
+        const nominalArea = document.getElementById('umrNominalArea');
+
+        // Reset all tabs to inactive style
+        const resetTabs = () => {
+            [tabUmp, tabUmk, tabNominal].forEach(tab => {
+                if (tab) {
+                    tab.className = 'umr-tab-btn';
+                    tab.style.background = 'transparent';
+                    tab.style.border = '1px solid transparent';
+                    tab.style.borderBottom = 'none';
+                    tab.style.color = '#0d6efd';
+                    tab.style.zIndex = '1';
+                }
+            });
+        };
+
+        const setActiveTab = (tab) => {
+            if (tab) {
+                tab.className = 'umr-tab-btn active';
+                tab.style.background = 'white';
+                tab.style.border = '1px solid #ddd';
+                tab.style.borderBottom = '1px solid white';
+                tab.style.zIndex = '2';
+            }
+        };
+
+        resetTabs();
+
+        if (tipe === 'NOMINAL') {
+            setActiveTab(tabNominal);
+            if (tableArea) tableArea.style.display = 'none';
+            if (nominalArea) nominalArea.style.display = 'block';
+            updateNominalDisplay();
+        } else {
+            if (tableArea) tableArea.style.display = 'block';
+            if (nominalArea) nominalArea.style.display = 'none';
+
+            if (tipe === 'UMP') {
+                setActiveTab(tabUmp);
+                const searchEl = document.getElementById('searchUmr');
+                if (searchEl) searchEl.placeholder = 'Search Province...';
+            } else {
+                setActiveTab(tabUmk);
+                const searchEl = document.getElementById('searchUmr');
+                if (searchEl) searchEl.placeholder = 'Search City/Regency...';
+            }
+
+            // Update thead dynamically to match exact formats from UMP/UMK screenshots
+            const thead = document.getElementById('tabelUmrBody')?.previousElementSibling;
+            if (thead) {
+                if (tipe === 'UMP') {
+                    thead.innerHTML = `
+                        <tr>
+                            <th style="padding: 12px 15px; border-bottom: 1px solid #ddd; border-right: 1px solid #ddd; text-align: left; font-weight: 500; color: white; background: #0d6efd; font-size: 14px;">StateId</th>
+                            <th style="padding: 12px 15px; border-bottom: 1px solid #ddd; border-right: 1px solid #ddd; text-align: left; font-weight: 500; color: white; background: #0d6efd; font-size: 14px;">StateCode</th>
+                            <th style="padding: 12px 15px; border-bottom: 1px solid #ddd; border-right: 1px solid #ddd; text-align: left; font-weight: 500; color: white; background: #0d6efd; font-size: 14px;">StateName</th>
+                            <th style="padding: 12px 15px; border-bottom: 1px solid #ddd; text-align: right; font-weight: 500; color: white; background: #0d6efd; font-size: 14px;" class="col-nominal">UMP Nominal</th>
+                        </tr>
+                    `;
+                } else {
+                    thead.innerHTML = `
+                        <tr>
+                            <th style="padding: 12px 15px; border-bottom: 1px solid #ddd; border-right: 1px solid #ddd; text-align: left; font-weight: 500; color: white; background: #0d6efd; font-size: 14px;">RegencyId</th>
+                            <th style="padding: 12px 15px; border-bottom: 1px solid #ddd; border-right: 1px solid #ddd; text-align: left; font-weight: 500; color: white; background: #0d6efd; font-size: 14px;">RegencyCode</th>
+                            <th style="padding: 12px 15px; border-bottom: 1px solid #ddd; border-right: 1px solid #ddd; text-align: left; font-weight: 500; color: white; background: #0d6efd; font-size: 14px;">RegencyName</th>
+                            <th style="padding: 12px 15px; border-bottom: 1px solid #ddd; border-right: 1px solid #ddd; text-align: left; font-weight: 500; color: white; background: #0d6efd; font-size: 14px;">StateId</th>
+                            <th style="padding: 12px 15px; border-bottom: 1px solid #ddd; text-align: right; font-weight: 500; color: white; background: #0d6efd; font-size: 14px;" class="col-nominal">UMK Nominal</th>
+                        </tr>
+                    `;
+                }
+            }
+        }
+
+        // If nominal, we don't need to fetch or render the table data
+        if (tipe === 'NOMINAL') return;
+
+        // Dynamically populate searchUmr select options
+        const searchEl = document.getElementById('searchUmr');
+        if (searchEl && searchEl.tagName === 'SELECT') {
+            const prevVal = searchEl.value;
+            let optionsHtml = '';
+
+            if (tipe === 'UMP') {
+                optionsHtml += '<option value="">-- Select Province --</option>';
+                const uniqueProvinces = [...new Set(umrAllData.map(row => row.nama_daerah))].sort();
+                uniqueProvinces.forEach(prov => {
+                    optionsHtml += `<option value="${prov}" ${prov === prevVal ? 'selected' : ''}>${prov}</option>`;
+                });
+            } else {
+                optionsHtml += '<option value="">-- Select City/Regency --</option>';
+                const uniqueRegencies = [...new Set(umrAllData.map(row => row.nama_daerah))].sort();
+                uniqueRegencies.forEach(reg => {
+                    optionsHtml += `<option value="${reg}" ${reg === prevVal ? 'selected' : ''}>${reg}</option>`;
+                });
+            }
+            searchEl.innerHTML = optionsHtml;
+        }
+
+        // Apply search filter
+        const q = (document.getElementById('searchUmr')?.value || '').toLowerCase();
+        umrFilteredData = q
+            ? umrAllData.filter(row => row.nama_daerah.toLowerCase().includes(q) || row.kode_daerah.toLowerCase().includes(q))
+            : [...umrAllData];
+
+        renderUmrPage();
+    } catch (err) { console.error(err); }
+}
+
+function renderUmrPage() {
+    const tbody = document.getElementById('tabelUmrBody');
+    if (!tbody) return;
+
+    const totalData = umrFilteredData.length;
+    const totalPages = Math.max(1, Math.ceil(totalData / UMR_PER_PAGE));
+
+    // Clamp page
+    if (umrCurrentPage > totalPages) umrCurrentPage = totalPages;
+    if (umrCurrentPage < 1) umrCurrentPage = 1;
+
+    const start = (umrCurrentPage - 1) * UMR_PER_PAGE;
+    const end = Math.min(start + UMR_PER_PAGE, totalData);
+    const pageData = umrFilteredData.slice(start, end);
+
+    const stateIdMap = {
+        'ID 11': 5, 'ID 12': 6, 'ID 17': 7, 'ID 15': 8, 'ID 14': 9, 'ID 13': 10, 'ID 16': 11,
+        'ID 18': 12, 'ID 19': 13, 'ID 21': 14, 'ID 36': 15, 'ID 32': 16, 'ID 31': 17, 'ID 33': 18,
+        'ID 35': 19, 'ID 34': 20, 'ID 51': 21, 'ID 52': 22, 'ID 53': 23, 'ID 61': 24, 'ID 63': 25,
+        'ID 62': 26, 'ID 64': 27, 'ID 75': 28, 'ID 73': 29, 'ID 74': 30, 'ID 72': 31, 'ID 71': 32,
+        'ID 76': 33, 'ID 81': 34, 'ID 82': 35, 'ID 91': 36, 'ID 92': 37, 'ID 65': 45
+    };
+
+    if (pageData.length > 0) {
+        let index = start + 1;
+        tbody.innerHTML = pageData.map(row => {
+            if (currentUmrType === 'UMP') {
+                const stateId = stateIdMap[row.kode_daerah] || (row.provinsi || index++);
+                return `
+                    <tr>
+                        <td class="td-code">${stateId}</td>
+                        <td class="td-code">${row.kode_daerah}</td>
+                        <td class="td-name">${row.nama_daerah}</td>
+                        <td class="td-nominal">${formatRupiah(row.nominal)}</td>
+                    </tr>
+                `;
+            } else {
+                const regencyId = index++;
+                const prefix = row.kode_daerah.split('.')[0] || '';
+                const stateId = stateIdMap[prefix] || (row.provinsi || 17);
+                return `
+                    <tr>
+                        <td class="td-code">${regencyId}</td>
+                        <td class="td-code">${row.kode_daerah}</td>
+                        <td class="td-name">${row.nama_daerah}</td>
+                        <td class="td-code">${stateId}</td>
+                        <td class="td-nominal">${formatRupiah(row.nominal)}</td>
+                    </tr>
+                `;
+            }
+        }).join('');
+    } else {
+        const colSpan = currentUmrType === 'UMP' ? 4 : 5;
+        tbody.innerHTML = `<tr><td colspan="${colSpan}" style="text-align:center; padding:40px; color:#aaa;">
+                <i class="fas fa-database" style="font-size:28px; margin-bottom:10px; display:block;"></i>
+                No ${currentUmrType} data available. Click <b>Upload</b> to add data.
+           </td></tr>`;
+    }
+
+    // Update pagination info
+    const infoEl = document.getElementById('umrPaginationInfo');
+    if (infoEl) {
+        infoEl.innerText = totalData > 0
+            ? `Showing ${start + 1} - ${end} of ${totalData} entries`
+            : 'No data';
+    }
+
+    // Render pagination controls
+    const controls = document.getElementById('umrPaginationControls');
+    if (controls) {
+        let html = '';
+        // Prev button
+        html += `<button ${umrCurrentPage <= 1 ? 'disabled' : ''} onclick="goUmrPage(${umrCurrentPage - 1})"><i class="fas fa-chevron-left"></i></button>`;
+
+        // Page numbers
+        const maxVisible = 4;
+        let pageStart = Math.max(1, umrCurrentPage - Math.floor(maxVisible / 2));
+        let pageEnd = Math.min(totalPages, pageStart + maxVisible - 1);
+        if (pageEnd - pageStart < maxVisible - 1) pageStart = Math.max(1, pageEnd - maxVisible + 1);
+
+        for (let i = pageStart; i <= pageEnd; i++) {
+            html += `<button class="${i === umrCurrentPage ? 'active' : ''}" onclick="goUmrPage(${i})">${i}</button>`;
+        }
+
+        // Next button
+        html += `<button ${umrCurrentPage >= totalPages ? 'disabled' : ''} onclick="goUmrPage(${umrCurrentPage + 1})"><i class="fas fa-chevron-right"></i></button>`;
+
+        controls.innerHTML = html;
+    }
+}
+
+function goUmrPage(page) {
+    umrCurrentPage = page;
+    renderUmrPage();
+}
+
+function switchUmrTab(tipe) {
+    currentUmrType = tipe;
+    umrCurrentPage = 1;
+
+    const selectType = document.getElementById('selectUmrType');
+    if (selectType) selectType.value = tipe;
+
+    // Reset search
+    const search = document.getElementById('searchUmr');
+    if (search) search.value = '';
+
+    renderUmrTable();
+}
+
+function filterUmrTable() {
+    umrCurrentPage = 1;
+    const q = (document.getElementById('searchUmr')?.value || '').toLowerCase();
+    umrFilteredData = q
+        ? umrAllData.filter(row => row.nama_daerah.toLowerCase().includes(q) || row.kode_daerah.toLowerCase().includes(q))
+        : [...umrAllData];
+    renderUmrPage();
+}
+
+function bukaModalUploadUmr() {
+    document.getElementById('modalUploadUmr').style.display = 'block';
+    document.getElementById('overlay').style.display = 'block';
+    document.getElementById('uploadUmrTipe').value = currentUmrType;
+
+    // Change modal title based on type (UMP or UMK)
+    const titleEl = document.querySelector('#modalUploadUmr .modal-header h3');
+    if (titleEl) {
+        titleEl.textContent = `Upload ${currentUmrType} Data`;
+    }
+
+    // Reset file input
+    const fileInput = document.getElementById('fileUmr');
+    if (fileInput) fileInput.value = '';
+    const fileNameEl = document.getElementById('umrFileName');
+    if (fileNameEl) fileNameEl.style.display = 'none';
+}
+
+function tutupModalUploadUmr() {
+    document.getElementById('modalUploadUmr').style.display = 'none';
+    document.getElementById('overlay').style.display = 'none';
+}
+
+function handleUmrSelectChange(val) {
+    if (val === 'MANUAL') {
+        // Balikkan dropdown ke pilihan sebelumnya agar filter tidak rusak
+        document.getElementById('selectUmrType').value = currentUmrType;
+        bukaModalManualUmr();
+    } else {
+        switchUmrTab(val);
+    }
+}
+
+function bukaModalManualUmr() {
+    document.getElementById('modalManualUmr').style.display = 'block';
+    document.getElementById('overlay').style.display = 'block';
+    document.getElementById('manualUmrTipe').value = currentUmrType;
+    document.getElementById('formManualUmr').reset();
+    document.getElementById('manualUmrTipe').value = currentUmrType;
+}
+
+function tutupModalManualUmr() {
+    document.getElementById('modalManualUmr').style.display = 'none';
+    document.getElementById('overlay').style.display = 'none';
+}
+
+// Excel Download Template
+function downloadTemplateUmr() {
+    const tipe = currentUmrType;
+    const templateData = [];
+
+    const stateIdMap = {
+        'ID 11': 5, 'ID 12': 6, 'ID 17': 7, 'ID 15': 8, 'ID 14': 9, 'ID 13': 10, 'ID 16': 11,
+        'ID 18': 12, 'ID 19': 13, 'ID 21': 14, 'ID 36': 15, 'ID 32': 16, 'ID 31': 17, 'ID 33': 18,
+        'ID 35': 19, 'ID 34': 20, 'ID 51': 21, 'ID 52': 22, 'ID 53': 23, 'ID 61': 24, 'ID 63': 25,
+        'ID 62': 26, 'ID 64': 27, 'ID 75': 28, 'ID 73': 29, 'ID 74': 30, 'ID 72': 31, 'ID 71': 32,
+        'ID 76': 33, 'ID 81': 34, 'ID 82': 35, 'ID 91': 36, 'ID 92': 37, 'ID 65': 45
+    };
+
+    // Jika ada data di tabel, masukkan data tersebut ke Excel
+    if (umrAllData && umrAllData.length > 0) {
+        let idCounter = 1;
+        umrAllData.forEach(row => {
+            if (tipe === 'UMP') {
+                const stateId = stateIdMap[row.kode_daerah] || (row.provinsi || idCounter++);
+                templateData.push({
+                    'StateId': stateId,
+                    'StateCode': row.kode_daerah,
+                    'StateName': row.nama_daerah,
+                    'UMP Nominal': row.nominal || 0
+                });
+            } else {
+                const regencyId = idCounter++;
+                const prefix = row.kode_daerah.split('.')[0] || '';
+                const stateId = stateIdMap[prefix] || (row.provinsi || 17);
+                templateData.push({
+                    'RegencyId': regencyId,
+                    'RegencyCode': row.kode_daerah,
+                    'RegencyName': row.nama_daerah,
+                    'StateId': stateId,
+                    'UMK Nominal': row.nominal || 0
+                });
+            }
+        });
+    } else {
+        // Fallback ke data contoh jika tabel kosong
+        if (tipe === 'UMP') {
+            const defaultUmpData = [
+                { code: 'ID 11', name: 'ACEH' },
+                { code: 'ID 12', name: 'SUMATERA UTARA' },
+                { code: 'ID 17', name: 'BENGKULU' },
+                { code: 'ID 15', name: 'JAMBI' },
+                { code: 'ID 14', name: 'RIAU' },
+                { code: 'ID 13', name: 'SUMATERA BARAT' },
+                { code: 'ID 16', name: 'SUMATERA SELATAN' },
+                { code: 'ID 18', name: 'LAMPUNG' },
+                { code: 'ID 19', name: 'KEP. BANGKA BELITUNG' },
+                { code: 'ID 21', name: 'KEP. RIAU' },
+                { code: 'ID 36', name: 'BANTEN' },
+                { code: 'ID 32', name: 'JAWA BARAT' },
+                { code: 'ID 31', name: 'DKI JAKARTA' },
+                { code: 'ID 33', name: 'JAWA TENGAH' },
+                { code: 'ID 35', name: 'JAWA TIMUR' },
+                { code: 'ID 34', name: 'DI YOGYAKARTA' },
+                { code: 'ID 51', name: 'BALI' },
+                { code: 'ID 52', name: 'NUSA TENGGARA BARAT' },
+                { code: 'ID 53', name: 'NUSA TENGGARA TIMUR' },
+                { code: 'ID 61', name: 'KALIMANTAN BARAT' },
+                { code: 'ID 63', name: 'KALIMANTAN SELATAN' },
+                { code: 'ID 62', name: 'KALIMANTAN TENGAH' },
+                { code: 'ID 64', name: 'KALIMANTAN TIMUR' },
+                { code: 'ID 75', name: 'GORONTALO' },
+                { code: 'ID 73', name: 'SULAWESI SELATAN' },
+                { code: 'ID 74', name: 'SULAWESI TENGGARA' },
+                { code: 'ID 72', name: 'SULAWESI TENGAH' },
+                { code: 'ID 71', name: 'SULAWESI UTARA' },
+                { code: 'ID 76', name: 'SULAWESI BARAT' },
+                { code: 'ID 81', name: 'MALUKU' },
+                { code: 'ID 82', name: 'MALUKU UTARA' },
+                { code: 'ID 91', name: 'PAPUA' },
+                { code: 'ID 92', name: 'PAPUA BARAT' },
+                { code: 'ID 65', name: 'KALIMANTAN UTARA' }
+            ];
+
+            defaultUmpData.forEach(row => {
+                const stateId = stateIdMap[row.code] || 17;
+                templateData.push({
+                    'StateId': stateId,
+                    'StateCode': row.code,
+                    'StateName': row.name,
+                    'UMP Nominal': 0
+                });
+            });
+        } else {
+            const defaultUmkData = [
+                { code: '1300000', name: 'Jakarta', nominal: 1000000 },
+                { code: 'ID 11.16', name: 'KAB. ACEH TAMIANG', nominal: 1000000 },
+                { code: 'ID 11.04', name: 'KAB. ACEH TENGAH', nominal: 1000000 },
+                { code: 'ID 11.03', name: 'KAB. ACEH TIMUR', nominal: 1000000 },
+                { code: 'ID 12.09', name: 'KAB. ASAHAN', nominal: 1000000 },
+                { code: 'ID 51.03', name: 'KAB. BADUNG', nominal: 5000000 },
+                { code: 'ID 32.04', name: 'KAB. BANDUNG', nominal: 1000000 },
+                { code: 'ID 32.17', name: 'KAB. BANDUNG BARAT', nominal: 1000000 },
+                { code: 'ID 72.01', name: 'KAB. BANGGAI', nominal: 1000000 },
+                { code: 'ID 35.26', name: 'KAB. BANGKALAN', nominal: 1000000 },
+                { code: 'ID 33.04', name: 'KAB. BANJARNEGARA', nominal: 1000000 },
+                { code: 'ID 73.03', name: 'KAB. BANTAENG', nominal: 1000000 },
+                { code: 'ID 34.02', name: 'KAB. BANTUL', nominal: 1000000 },
+                { code: 'ID 16.07', name: 'KAB. BANYUASIN', nominal: 1000000 },
+                { code: 'ID 33.02', name: 'KAB. BANYUMAS', nominal: 1000000 },
+                { code: 'ID 35.10', name: 'KAB. BANYUWANGI', nominal: 1000000 },
+                { code: 'ID 73.11', name: 'KAB. BARRU', nominal: 1000000 },
+                { code: 'ID 33.25', name: 'KAB. BATANG', nominal: 1000000 },
+                { code: 'ID 12.19', name: 'KAB. BATU BARA', nominal: 1000000 },
+                { code: 'ID 32.16', name: 'KAB. BEKASI', nominal: 1000000 },
+                { code: 'ID 19.02', name: 'KAB. BELITUNG', nominal: 1000000 },
+                { code: 'ID 14.03', name: 'KAB. BENGKALIS', nominal: 1000000 },
+                { code: 'ID 17.01', name: 'KAB. BENGKULU SELATAN', nominal: 1000000 },
+                { code: 'ID 64.03', name: 'KAB. BERAU', nominal: 1000000 },
+                { code: 'ID 11.11', name: 'KAB. BIREUEN', nominal: 1000000 },
+                { code: 'ID 33.16', name: 'KAB. BLORA', nominal: 1000000 },
+                { code: 'ID 32.01', name: 'KAB. BOGOR', nominal: 1000000 },
+                { code: 'ID 35.22', name: 'KAB. BOJONEGORO', nominal: 1000000 },
+                { code: 'ID 35.11', name: 'KAB. BONDOWOSO', nominal: 1000000 },
+                { code: 'ID 73.08', name: 'KAB. BONE', nominal: 1000000 },
+                { code: 'ID 33.09', name: 'KAB. BOYOLALI', nominal: 1000000 },
+                { code: 'ID 33.29', name: 'KAB. BREBES', nominal: 1000000 },
+                { code: 'ID 51.08', name: 'KAB. BULELENG', nominal: 1000000 },
+                { code: 'ID 73.02', name: 'KAB. BULUKUMBA', nominal: 1000000 },
+                { code: 'ID 65.01', name: 'KAB. BULUNGAN', nominal: 1000000 },
+                { code: 'ID 15.08', name: 'KAB. BUNGO', nominal: 1000000 },
+                { code: 'ID 32.07', name: 'KAB. CIAMIS', nominal: 1000000 },
+                { code: 'ID 32.03', name: 'KAB. CIANJUR', nominal: 1000000 },
+                { code: 'ID 33.01', name: 'KAB. CILACAP', nominal: 1000000 },
+                { code: 'ID 32.09', name: 'KAB. CIREBON', nominal: 1000000 },
+                { code: 'ID 12.07', name: 'KAB. DELI SERDANG', nominal: 1000000 },
+                { code: 'ID 33.21', name: 'KAB. DEMAK', nominal: 1000000 },
+                { code: 'ID 13.10', name: 'KAB. DHARMASRAYA', nominal: 1000000 },
+                { code: 'ID 53.08', name: 'KAB. ENDE', nominal: 1000000 },
+                { code: 'ID 73.16', name: 'KAB. ENREKANG', nominal: 1000000 },
+                { code: 'ID 32.05', name: 'KAB. GARUT', nominal: 1000000 },
+                { code: 'ID 51.04', name: 'KAB. GIANYAR', nominal: 1000000 },
+                { code: 'ID 75.01', name: 'KAB. GORONTALO', nominal: 1000000 },
+                { code: 'ID 73.06', name: 'KAB. GOWA', nominal: 1000000 },
+                { code: 'ID 35.25', name: 'KAB. GRESIK', nominal: 1000000 },
+                { code: 'ID 33.15', name: 'KAB. GROBOGAN', nominal: 1000000 },
+                { code: 'ID 63.07', name: 'KAB. HULU SUNGAI TENGAH', nominal: 1000000 },
+                { code: 'ID 63.08', name: 'KAB. HULU SUNGAI UTARA', nominal: 1000000 },
+                { code: 'ID 14.04', name: 'KAB. INDRAGIRI HILIR', nominal: 1000000 },
+                { code: 'ID 14.02', name: 'KAB. INDRAGIRI HULU', nominal: 1000000 },
+                { code: 'ID 32.12', name: 'KAB. INDRAMAYU', nominal: 1000000 },
+                { code: 'ID 91.03', name: 'KAB. JAYAPURA', nominal: 1000000 },
+                { code: 'ID 35.09', name: 'KAB. JEMBER', nominal: 1000000 },
+                { code: 'ID 51.01', name: 'KAB. JEMBRANA', nominal: 1000000 },
+                { code: 'ID 73.04', name: 'KAB. JENEPONTO', nominal: 1000000 },
+                { code: 'ID 33.20', name: 'KAB. JEPARA', nominal: 1000000 },
+                { code: 'ID 35.17', name: 'KAB. JOMBANG', nominal: 1000000 },
+                { code: 'ID 14.01', name: 'KAB. KAMPAR', nominal: 1000000 },
+                { code: 'ID 62.03', name: 'KAB. KAPUAS', nominal: 1000000 },
+                { code: 'ID 61.06', name: 'KAB. KAPUAS HULU', nominal: 1000000 },
+                { code: 'ID 33.13', name: 'KAB. KARANGANYAR', nominal: 1000000 },
+                { code: 'ID 32.15', name: 'KAB. KARAWANG', nominal: 1000000 },
+                { code: 'ID 12.06', name: 'KAB. KARO', nominal: 1000000 },
+                { code: 'ID 33.05', name: 'KAB. KEBUMEN', nominal: 1000000 },
+                { code: 'ID 33.24', name: 'KAB. KENDAL', nominal: 1000000 },
+                { code: 'ID 17.08', name: 'KAB. KEPAHIANG', nominal: 1000000 },
+                { code: 'ID 61.04', name: 'KAB. KETAPANG', nominal: 1000000 },
+                { code: 'ID 33.10', name: 'KAB. KLATEN', nominal: 1000000 },
+                { code: 'ID 74.01', name: 'KAB. KOLAKA', nominal: 1000000 },
+                { code: 'ID 63.02', name: 'KAB. KOTABARU', nominal: 1000000 },
+                { code: 'ID 62.01', name: 'KAB. KOTAWARINGIN BARAT', nominal: 1000000 },
+                { code: 'ID 62.02', name: 'KAB. KOTAWARINGIN TIMUR', nominal: 1000000 },
+                { code: 'ID 61.12', name: 'KAB. KUBU RAYA', nominal: 1000000 },
+                { code: 'ID 33.19', name: 'KAB. KUDUS', nominal: 1000000 },
+                { code: 'ID 34.01', name: 'KAB. KULON PROGO', nominal: 1000000 },
+                { code: 'ID 32.08', name: 'KAB. KUNINGAN', nominal: 1000000 },
+                { code: 'ID 64.07', name: 'KAB. KUTAI BARAT', nominal: 1000000 },
+                { code: 'ID 64.02', name: 'KAB. KUTAI KARTANEGARA', nominal: 1000000 },
+                { code: 'ID 64.08', name: 'KAB. KUTAI TIMUR', nominal: 1000000 },
+                { code: 'ID 12.10', name: 'KAB. LABUHANBATU', nominal: 1000000 },
+                { code: 'ID 12.23', name: 'KAB. LABUHANBATU UTARA', nominal: 1000000 },
+                { code: 'ID 16.04', name: 'KAB. LAHAT', nominal: 1000000 },
+                { code: 'ID 35.24', name: 'KAB. LAMONGAN', nominal: 1000000 },
+                { code: 'ID 18.04', name: 'KAB. LAMPUNG BARAT', nominal: 1000000 },
+                { code: 'ID 18.01', name: 'KAB. LAMPUNG SELATAN', nominal: 1000000 },
+                { code: 'ID 18.02', name: 'KAB. LAMPUNG TENGAH', nominal: 1000000 },
+                { code: 'ID 18.07', name: 'KAB. LAMPUNG TIMUR', nominal: 1000000 },
+                { code: 'ID 18.03', name: 'KAB. LAMPUNG UTARA', nominal: 1000000 },
+                { code: 'ID 61.08', name: 'KAB. LANDAK', nominal: 1000000 },
+                { code: 'ID 12.05', name: 'KAB. LANGKAT', nominal: 1000000 },
+                { code: 'ID 36.02', name: 'KAB. LEBAK', nominal: 1000000 },
+                { code: 'ID 52.01', name: 'KAB. LOMBOK BARAT', nominal: 1000000 },
+                { code: 'ID 52.02', name: 'KAB. LOMBOK TENGAH', nominal: 1000000 },
+                { code: 'ID 52.03', name: 'KAB. LOMBOK TIMUR', nominal: 1000000 },
+                { code: 'ID 35.08', name: 'KAB. LUMAJANG', nominal: 1000000 },
+                { code: 'ID 73.17', name: 'KAB. LUWU', nominal: 1000000 },
+                { code: 'ID 73.24', name: 'KAB. LUWU TIMUR', nominal: 1000000 },
+                { code: 'ID 73.22', name: 'KAB. LUWU UTARA', nominal: 1000000 },
+                { code: 'ID 35.19', name: 'KAB. MADIUN', nominal: 1000000 },
+                { code: 'ID 33.08', name: 'KAB. MAGELANG', nominal: 1000000 },
+                { code: 'ID 35.20', name: 'KAB. MAGETAN', nominal: 1000000 },
+                { code: 'ID 32.10', name: 'KAB. MAJALENGKA', nominal: 1000000 },
+                { code: 'ID 76.05', name: 'KAB. MAJENE', nominal: 1000000 },
+                { code: 'ID 35.07', name: 'KAB. MALANG', nominal: 1000000 },
+                { code: 'ID 76.02', name: 'KAB. MAMUJU', nominal: 1000000 },
+                { code: 'ID 12.13', name: 'KAB. MANDAILING NATAL', nominal: 1000000 },
+                { code: 'ID 53.15', name: 'KAB. MANGGARAI BARAT', nominal: 1000000 },
+                { code: 'ID 92.02', name: 'KAB. MANOKWARI', nominal: 1000000 },
+                { code: 'ID 73.09', name: 'KAB. MAROS', nominal: 1000000 },
+                { code: 'ID 61.10', name: 'KAB. MELAWI', nominal: 1000000 },
+                { code: 'ID 15.02', name: 'KAB. MERANGIN', nominal: 1000000 },
+                { code: 'ID 91.01', name: 'KAB. MERAUKE', nominal: 1000000 },
+                { code: 'ID 91.09', name: 'KAB. MIMIKA', nominal: 1000000 },
+                { code: 'ID 71.05', name: 'KAB. MINAHASA SELATAN', nominal: 1000000 },
+                { code: 'ID 71.06', name: 'KAB. MINAHASA UTARA', nominal: 1000000 },
+                { code: 'ID 35.16', name: 'KAB. MOJOKERTO', nominal: 1000000 },
+                { code: 'ID 72.06', name: 'KAB. MOROWALI', nominal: 1000000 },
+                { code: 'ID 16.03', name: 'KAB. MUARA ENIM', nominal: 1000000 },
+                { code: 'ID 16.06', name: 'KAB. MUSI BANYUASIN', nominal: 1000000 },
+                { code: 'ID 91.04', name: 'KAB. NABIRE', nominal: 1000000 },
+                { code: 'ID 35.18', name: 'KAB. NGANJUK', nominal: 1000000 },
+                { code: 'ID 35.21', name: 'KAB. NGAWI', nominal: 1000000 },
+                { code: 'ID 16.10', name: 'KAB. OGAN ILIR', nominal: 1000000 },
+                { code: 'ID 16.02', name: 'KAB. OGAN KOMERING ILIR', nominal: 1000000 },
+                { code: 'ID 16.01', name: 'KAB. OGAN KOMERING ULU', nominal: 1000000 },
+                { code: 'ID 16.09', name: 'KAB. OGAN KOMERING ULU SELATAN', nominal: 1000000 },
+                { code: 'ID 16.08', name: 'KAB. OGAN KOMERING ULU TIMUR', nominal: 1000000 },
+                { code: 'ID 35.01', name: 'KAB. PACITAN', nominal: 1000000 },
+                { code: 'ID 35.28', name: 'KAB. PAMEKASAN', nominal: 1000000 },
+                { code: 'ID 36.01', name: 'KAB. PANDEGLANG', nominal: 1000000 },
+                { code: 'ID 32.18', name: 'KAB. PANGANDARAN', nominal: 1000000 },
+                { code: 'ID 73.10', name: 'KAB. PANGKAJENE KEPULAUAN', nominal: 1000000 },
+                { code: 'ID 13.12', name: 'KAB. PASAMAN BARAT', nominal: 1000000 },
+                { code: 'ID 35.14', name: 'KAB. PASURUAN', nominal: 1000000 },
+                { code: 'ID 33.18', name: 'KAB. PATI', nominal: 1000000 },
+                { code: 'ID 33.26', name: 'KAB. PEKALONGAN', nominal: 1000000 },
+                { code: 'ID 14.05', name: 'KAB. PELALAWAN', nominal: 1000000 },
+                { code: 'ID 33.27', name: 'KAB. PEMALANG', nominal: 1000000 },
+                { code: 'ID 64.09', name: 'KAB. PENAJAM PASER UTARA', nominal: 1000000 },
+                { code: 'ID 18.09', name: 'KAB. PESAWARAN', nominal: 1000000 },
+                { code: 'ID 13.01', name: 'KAB. PESISIR SELATAN', nominal: 1000000 },
+                { code: 'ID 11.07', name: 'KAB. PIDIE', nominal: 1000000 },
+                { code: 'ID 73.15', name: 'KAB. PINRANG', nominal: 1000000 },
+                { code: 'ID 76.04', name: 'KAB. POLEWALI MANDAR', nominal: 1000000 },
+                { code: 'ID 35.02', name: 'KAB. PONOROGO', nominal: 1000000 },
+                { code: 'ID 18.10', name: 'KAB. PRINGSEWU', nominal: 1000000 },
+                { code: 'ID 35.13', name: 'KAB. PROBOLINGGO', nominal: 1000000 },
+                { code: 'ID 33.03', name: 'KAB. PURBALINGGA', nominal: 1000000 },
+                { code: 'ID 32.14', name: 'KAB. PURWAKARTA', nominal: 1000000 },
+                { code: 'ID 33.06', name: 'KAB. PURWOREJO', nominal: 1000000 },
+                { code: 'ID 17.02', name: 'KAB. REJANG LEBONG', nominal: 1000000 },
+                { code: 'ID 33.17', name: 'KAB. REMBANG', nominal: 1000000 },
+                { code: 'ID 14.07', name: 'KAB. ROKAN HILIR', nominal: 1000000 },
+                { code: 'ID 14.06', name: 'KAB. ROKAN HULU', nominal: 1000000 },
+                { code: 'ID 61.03', name: 'KAB. SANGGAU', nominal: 1000000 },
+                { code: 'ID 15.03', name: 'KAB. SAROLANGUN', nominal: 1000000 },
+                { code: 'ID 33.22', name: 'KAB. SEMARANG', nominal: 1000000 },
+                { code: 'ID 36.04', name: 'KAB. SERANG', nominal: 1000000 },
+                { code: 'ID 12.18', name: 'KAB. SERDANG BEDAGAI', nominal: 1000000 },
+                { code: 'ID 14.08', name: 'KAB. SIAK', nominal: 1000000 },
+                { code: 'ID 73.14', name: 'KAB. SIDENRENG RAPPANG', nominal: 1000000 },
+                { code: 'ID 35.15', name: 'KAB. SIDOARJO', nominal: 1000000 },
+                { code: 'ID 72.10', name: 'KAB. SIGI', nominal: 1000000 },
+                { code: 'ID 73.07', name: 'KAB. SINJAI', nominal: 1000000 },
+                { code: 'ID 61.05', name: 'KAB. SINTANG', nominal: 1000000 },
+                { code: 'ID 35.12', name: 'KAB. SITUBONDO', nominal: 1000000 },
+                { code: 'ID 34.04', name: 'KAB. SLEMAN', nominal: 1000000 },
+                { code: 'ID 73.12', name: 'KAB. SOPPENG', nominal: 1000000 },
+                { code: 'ID 92.01', name: 'KAB. SORONG', nominal: 1000000 },
+                { code: 'ID 33.14', name: 'KAB. SRAGEN', nominal: 1000000 },
+                { code: 'ID 32.13', name: 'KAB. SUBANG', nominal: 1000000 },
+                { code: 'ID 32.02', name: 'KAB. SUKABUMI', nominal: 1000000 },
+                { code: 'ID 33.11', name: 'KAB. SUKOHARJO', nominal: 1000000 },
+                { code: 'ID 52.04', name: 'KAB. SUMBAWA', nominal: 1000000 },
+                { code: 'ID 32.11', name: 'KAB. SUMEDANG', nominal: 1000000 },
+                { code: 'ID 35.29', name: 'KAB. SUMENEP', nominal: 1000000 },
+                { code: 'ID 63.09', name: 'KAB. TABALONG', nominal: 1000000 },
+                { code: 'ID 51.02', name: 'KAB. TABANAN', nominal: 1000000 },
+                { code: 'ID 73.05', name: 'KAB. TAKALAR', nominal: 1000000 },
+                { code: 'ID 73.18', name: 'KAB. TANA TORAJA', nominal: 1000000 },
+                { code: 'ID 63.10', name: 'KAB. TANAH BUMBU', nominal: 1000000 },
+                { code: 'ID 63.01', name: 'KAB. TANAH LAUT', nominal: 1000000 },
+                { code: 'ID 36.03', name: 'KAB. TANGERANG', nominal: 1000000 },
+                { code: 'ID 18.06', name: 'KAB. TANGGAMUS', nominal: 1000000 },
+                { code: 'ID 12.02', name: 'KAB. TAPANULI UTARA', nominal: 1000000 },
+                { code: 'ID 63.05', name: 'KAB. TAPIN', nominal: 1000000 },
+                { code: 'ID 32.06', name: 'KAB. TASIKMALAYA', nominal: 1000000 },
+                { code: 'ID 15.09', name: 'KAB. TEBO', nominal: 1000000 },
+                { code: 'ID 33.28', name: 'KAB. TEGAL', nominal: 1000000 },
+                { code: 'ID 33.23', name: 'KAB. TEMANGGUNG', nominal: 1000000 },
+                { code: 'ID 12.12', name: 'KAB. TOBA SAMOSIR', nominal: 1000000 },
+                { code: 'ID 73.26', name: 'KAB. TORAJA UTARA', nominal: 1000000 },
+                { code: 'ID 35.23', name: 'KAB. TUBAN', nominal: 1000000 },
+                { code: 'ID 18.05', name: 'KAB. TULANG BAWANG', nominal: 1000000 },
+                { code: 'ID 35.04', name: 'KAB. TULUNGAGUNG', nominal: 1000000 },
+                { code: 'ID 73.13', name: 'KAB. WAJO', nominal: 1000000 },
+                { code: 'ID 33.12', name: 'KAB. WONOGIRI', nominal: 1000000 },
+                { code: 'ID 33.07', name: 'KAB. WONOSOBO', nominal: 1000000 },
+                { code: 'ID 31.73', name: 'KOTA ADM. JAKARTA BARAT', nominal: 1000000 },
+                { code: 'ID 31.71', name: 'KOTA ADM. JAKARTA PUSAT', nominal: 1000000 },
+                { code: 'ID 31.74', name: 'KOTA ADM. JAKARTA SELATAN', nominal: 1000000 },
+                { code: 'ID 31.75', name: 'KOTA ADM. JAKARTA TIMUR', nominal: 1000000 },
+                { code: 'ID 31.72', name: 'KOTA ADM. JAKARTA UTARA', nominal: 1000000 },
+                { code: 'ID 81.71', name: 'KOTA AMBON', nominal: 1000000 },
+                { code: 'ID 64.71', name: 'KOTA BALIKPAPAN', nominal: 1000000 },
+                { code: 'ID 11.71', name: 'KOTA BANDA ACEH', nominal: 1000000 },
+                { code: 'ID 18.71', name: 'KOTA BANDAR LAMPUNG', nominal: 1000000 },
+                { code: 'ID 32.73', name: 'KOTA BANDUNG', nominal: 1000000 },
+                { code: 'ID 32.79', name: 'KOTA BANJAR', nominal: 1000000 },
+                { code: 'ID 63.72', name: 'KOTA BANJARBARU', nominal: 1000000 },
+                { code: 'ID 63.71', name: 'KOTA BANJARMASIN', nominal: 1000000 },
+                { code: 'ID 21.71', name: 'KOTA BATAM', nominal: 1000000 },
+                { code: 'ID 35.79', name: 'KOTA BATU', nominal: 1000000 },
+                { code: 'ID 74.72', name: 'KOTA BAU BAU', nominal: 1000000 },
+                { code: 'ID 32.75', name: 'KOTA BEKASI', nominal: 1000000 },
+                { code: 'ID 17.71', name: 'KOTA BENGKULU', nominal: 1000000 },
+                { code: 'ID 12.75', name: 'KOTA BINJAI', nominal: 1000000 },
+                { code: 'ID 71.72', name: 'KOTA BITUNG', nominal: 1000000 },
+                { code: 'ID 35.72', name: 'KOTA BLITAR', nominal: 1000000 },
+                { code: 'ID 32.71', name: 'KOTA BOGOR', nominal: 1000000 },
+                { code: 'ID 64.74', name: 'KOTA BONTANG', nominal: 1000000 },
+                { code: 'ID 13.75', name: 'KOTA BUKITTINGGI', nominal: 1000000 },
+                { code: 'ID 36.72', name: 'KOTA CILEGON', nominal: 1000000 },
+                { code: 'ID 32.77', name: 'KOTA CIMAHI', nominal: 1000000 },
+                { code: 'ID 32.74', name: 'KOTA CIREBON', nominal: 1000000 },
+                { code: 'ID 51.71', name: 'KOTA DENPASAR', nominal: 1000000 },
+                { code: 'ID 32.76', name: 'KOTA DEPOK', nominal: 1000000 },
+                { code: 'ID 14.72', name: 'KOTA DUMAI', nominal: 1000000 },
+                { code: 'ID 75.71', name: 'KOTA GORONTALO', nominal: 1000000 },
+                { code: 'ID 15.71', name: 'KOTA JAMBI', nominal: 1000000 },
+                { code: 'ID 91.71', name: 'KOTA JAYAPURA', nominal: 1000000 },
+                { code: 'ID 35.71', name: 'KOTA KEDIRI', nominal: 1000000 },
+                { code: 'ID 74.71', name: 'KOTA KENDARI', nominal: 1000000 },
+                { code: 'ID 71.74', name: 'KOTA KOTAMOBAGU', nominal: 1000000 },
+                { code: 'ID 53.71', name: 'KOTA KUPANG', nominal: 1000000 },
+                { code: 'ID 11.74', name: 'KOTA LANGSA', nominal: 1000000 },
+                { code: 'ID 11.73', name: 'KOTA LHOKSEUMAWE', nominal: 1000000 },
+                { code: 'ID 16.73', name: 'KOTA LUBUK LINGGAU', nominal: 1000000 },
+                { code: 'ID 35.77', name: 'KOTA MADIUN', nominal: 1000000 },
+                { code: 'ID 33.71', name: 'KOTA MAGELANG', nominal: 1000000 },
+                { code: 'ID 73.71', name: 'KOTA MAKASSAR', nominal: 1000000 },
+                { code: 'ID 35.73', name: 'KOTA MALANG', nominal: 1000000 },
+                { code: 'ID 71.71', name: 'KOTA MANADO', nominal: 1000000 },
+                { code: 'ID 52.71', name: 'KOTA MATARAM', nominal: 1000000 },
+                { code: 'ID 12.71', name: 'KOTA MEDAN', nominal: 1000000 },
+                { code: 'ID 18.72', name: 'KOTA METRO', nominal: 1000000 },
+                { code: 'ID 35.76', name: 'KOTA MOJOKERTO', nominal: 1000000 },
+                { code: 'ID 13.71', name: 'KOTA PADANG', nominal: 1000000 },
+                { code: 'ID 13.74', name: 'KOTA PADANG PANJANG', nominal: 1000000 },
+                { code: 'ID 12.77', name: 'KOTA PADANG SIDEMPUAN', nominal: 1000000 },
+                { code: 'ID 16.72', name: 'KOTA PAGAR ALAM', nominal: 1000000 },
+                { code: 'ID 62.71', name: 'KOTA PALANGKARAYA', nominal: 1000000 },
+                { code: 'ID 16.71', name: 'KOTA PALEMBANG', nominal: 1000000 },
+                { code: 'ID 73.73', name: 'KOTA PALOPO', nominal: 1000000 },
+                { code: 'ID 72.71', name: 'KOTA PALU', nominal: 1000000 },
+                { code: 'ID 19.71', name: 'KOTA PANGKAL PINANG', nominal: 1000000 },
+                { code: 'ID 73.72', name: 'KOTA PARE PARE', nominal: 1000000 },
+                { code: 'ID 13.77', name: 'KOTA PARIAMAN', nominal: 1000000 },
+                { code: 'ID 35.75', name: 'KOTA PASURUAN', nominal: 1000000 },
+                { code: 'ID 13.76', name: 'KOTA PAYAKUMBUH', nominal: 1000000 },
+                { code: 'ID 33.75', name: 'KOTA PEKALONGAN', nominal: 1000000 },
+                { code: 'ID 14.71', name: 'KOTA PEKANBARU', nominal: 1000000 },
+                { code: 'ID 12.72', name: 'KOTA PEMATANGSIANTAR', nominal: 1000000 },
+                { code: 'ID 61.71', name: 'KOTA PONTIANAK', nominal: 1000000 },
+                { code: 'ID 16.74', name: 'KOTA PRABUMULIH', nominal: 1000000 },
+                { code: 'ID 35.74', name: 'KOTA PROBOLINGGO', nominal: 1000000 },
+                { code: 'ID 33.73', name: 'KOTA SALATIGA', nominal: 1000000 },
+                { code: 'ID 64.72', name: 'KOTA SAMARINDA', nominal: 1000000 },
+                { code: 'ID 33.74', name: 'KOTA SEMARANG', nominal: 1000000 },
+                { code: 'ID 36.73', name: 'KOTA SERANG', nominal: 1000000 },
+                { code: 'ID 12.73', name: 'KOTA SIBOLGA', nominal: 1000000 },
+                { code: 'ID 61.72', name: 'KOTA SINGKAWANG', nominal: 1000000 },
+                { code: 'ID 13.72', name: 'KOTA SOLOK', nominal: 1000000 },
+                { code: 'ID 92.71', name: 'KOTA SORONG', nominal: 1000000 },
+                { code: 'ID 32.72', name: 'KOTA SUKABUMI', nominal: 1000000 },
+                { code: 'ID 15.72', name: 'KOTA SUNGAI PENUH', nominal: 1000000 },
+                { code: 'ID 35.78', name: 'KOTA SURABAYA', nominal: 1000000 },
+                { code: 'ID 33.72', name: 'KOTA SURAKARTA', nominal: 1000000 },
+                { code: 'ID 36.71', name: 'KOTA TANGERANG', nominal: 1000000 },
+                { code: 'ID 36.74', name: 'KOTA TANGERANG SELATAN', nominal: 1000000 },
+                { code: 'ID 12.74', name: 'KOTA TANJUNG BALAI', nominal: 1000000 },
+                { code: 'ID 21.72', name: 'KOTA TANJUNG PINANG', nominal: 1000000 },
+                { code: 'ID 65.71', name: 'KOTA TARAKAN', nominal: 1000000 },
+                { code: 'ID 32.78', name: 'KOTA TASIKMALAYA', nominal: 1000000 },
+                { code: 'ID 12.76', name: 'KOTA TEBING TINGGI', nominal: 1000000 },
+                { code: 'ID 33.76', name: 'KOTA TEGAL', nominal: 1000000 },
+                { code: 'ID 82.71', name: 'KOTA TERNATE', nominal: 1000000 },
+                { code: 'ID 71.73', name: 'KOTA TOMOHON', nominal: 1000000 },
+                { code: 'ID 34.71', name: 'KOTA YOGYAKARTA', nominal: 1000000 },
+                { code: 'MYS-00001', name: 'Malaysia', nominal: 1000000 },
+                { code: 'SIN-01001', name: 'Singapore', nominal: 1000000 },
+            ];
+
+            let regId = 1;
+            defaultUmkData.forEach(row => {
+                const prefix = row.code.split('.')[0] || '';
+                const stateId = stateIdMap[prefix] || 17;
+                templateData.push({
+                    'RegencyId': regId++,
+                    'RegencyCode': row.code,
+                    'RegencyName': row.name,
+                    'StateId': stateId,
+                    'UMK Nominal': row.nominal || 0
+                });
+            });
+        }
+    }
+
+    const worksheet = XLSX.utils.json_to_sheet(templateData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, `${tipe} Template`);
+
+    // Auto-adjust column widths
+    const max_widths = tipe === 'UMP' ? [12, 15, 25, 18] : [12, 15, 25, 12, 18];
+    worksheet['!cols'] = max_widths.map(w => ({ wch: w }));
+
+    const filename = `template_${tipe.toLowerCase()}_${new Date().getFullYear()}.xlsx`;
+    XLSX.writeFile(workbook, filename);
+    showToast(`${tipe} template downloaded successfully!`, 'success');
+}
+
+// Drag & Drop + File Input Handling
+function triggerUmrFileInput() {
+    const fileInput = document.getElementById('fileUmr');
+    if (fileInput) fileInput.click();
+}
+
+function handleUmrFileSelect(e) {
+    const file = e && e.target && e.target.files ? e.target.files[0] : null;
+    if (file) {
+        const fileNameEl = document.getElementById('umrFileName');
+        if (fileNameEl) {
+            fileNameEl.innerText = `📌 ${file.name}`;
+            fileNameEl.style.display = 'block';
+        }
+    }
+}
+
+function initUmrUploader() {
+    const dropZone = document.getElementById('umrDropZone');
+    const fileInput = document.getElementById('fileUmr');
+
+    if (fileInput) {
+        fileInput.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+    }
+
+    if (dropZone) {
+        ['dragenter', 'dragover'].forEach(evt => {
+            dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+        });
+        ['dragleave', 'drop'].forEach(evt => {
+            dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.remove('drag-over'); });
+        });
+        dropZone.addEventListener('drop', (e) => {
+            const file = e.dataTransfer.files[0];
+            const isExcel = file && (file.name.endsWith('.xlsx') || file.name.endsWith('.xls'));
+            if (file && isExcel) {
+                fileInput.files = e.dataTransfer.files;
+                handleUmrFileSelect({ target: { files: e.dataTransfer.files } });
+            } else {
+                showToast('Only Excel files (.xlsx, .xls) are allowed!', 'error');
+            }
+        });
+    }
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initUmrUploader);
+} else {
+    initUmrUploader();
+}
+
+// Excel Upload Handler
+document.addEventListener('DOMContentLoaded', () => {
+    bindFormUploadUmr();
+});
+// Also attempt immediate binding in case DOM is ready
+bindFormUploadUmr();
+
+function bindFormUploadUmr() {
+    const formUploadUmr = document.getElementById('formUploadUmr');
+    if (!formUploadUmr || formUploadUmr.dataset.bound) return;
+    formUploadUmr.dataset.bound = "true";
+
+    formUploadUmr.addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const fileInput = document.getElementById('fileUmr');
+        const file = fileInput ? fileInput.files[0] : null;
+
+        if (!file) {
+            showToast('Please select an Excel file first!', 'error');
+            return;
+        }
+
+        showToast('Reading and uploading data...', 'info');
+
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+            try {
+                const data = new Uint8Array(event.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const sheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[sheetName];
+                const json = XLSX.utils.sheet_to_json(worksheet);
+
+                if (!json || json.length === 0) {
+                    showToast('Excel file is empty!', 'error');
+                    return;
+                }
+
+                const tipe = document.getElementById('uploadUmrTipe').value || currentUmrType || 'UMP';
+                const year = document.getElementById('uploadUmrYear').value || '2026';
+
+                // Dynamically map columns in the Excel JSON array
+                const firstRow = json[0];
+                const keys = Object.keys(firstRow);
+
+                let codeKey = '';
+                let nameKey = '';
+                let nominalKey = '';
+                let stateIdKey = '';
+
+                keys.forEach(k => {
+                    const cleanK = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+                    if (cleanK.includes('code') || cleanK.includes('kode')) {
+                        codeKey = k;
+                    } else if (
+                        cleanK.includes('name') || cleanK.includes('nama') ||
+                        cleanK.includes('daerah') || cleanK.includes('kabupaten') ||
+                        cleanK.includes('provinsi') || cleanK.includes('kota') ||
+                        cleanK.includes('region') || cleanK.includes('city') ||
+                        cleanK.includes('regency') || cleanK.includes('state')
+                    ) {
+                        if (!cleanK.includes('code') && !cleanK.includes('kode') && !cleanK.includes('id')) {
+                            nameKey = k;
+                        }
+                    } else if (
+                        cleanK.includes('amount') || cleanK.includes('nominal') ||
+                        cleanK.includes('gaji') || cleanK.includes('ump') ||
+                        cleanK.includes('umk') || cleanK.includes('value') ||
+                        cleanK.includes('besaran') || cleanK.includes('rate') ||
+                        cleanK.includes('value')
+                    ) {
+                        nominalKey = k;
+                    } else if (cleanK === 'stateid' || cleanK === 'provinsiid' || cleanK === 'idprovinsi') {
+                        stateIdKey = k;
+                    }
+                });
+
+                // Fallbacks if auto-detect didn't catch specific positions
+                if (!codeKey) {
+                    if (tipe === 'UMP' && keys.length >= 4) {
+                        stateIdKey = stateIdKey || keys[0];
+                        codeKey = keys[1];
+                        nameKey = nameKey || keys[2];
+                        nominalKey = nominalKey || keys[3];
+                    } else if (tipe === 'UMK' && keys.length >= 5) {
+                        codeKey = keys[1];
+                        nameKey = nameKey || keys[2];
+                        stateIdKey = stateIdKey || keys[3];
+                        nominalKey = nominalKey || keys[4];
+                    }
+                }
+
+                // If still missing name or nominal key, inspect by row sample types
+                if (!nameKey) {
+                    nameKey = keys.find(k => typeof firstRow[k] === 'string' && k !== codeKey) || keys[0];
+                }
+                if (!nominalKey) {
+                    nominalKey = keys.find(k => {
+                        const val = String(firstRow[k] || '').replace(/[^0-9]/g, '');
+                        return val.length > 0 && k !== codeKey && k !== stateIdKey;
+                    }) || keys[keys.length - 1];
+                }
+
+                let rowIdx = 1;
+                const items = json.map(row => {
+                    let rawNominal = String(row[nominalKey] || '0').trim();
+                    let nominalVal = parseFloat(rawNominal.replace(/[^0-9.-]+/g, '')) || 0;
+
+                    let nameVal = String(row[nameKey] || '').trim();
+                    let codeVal = String(row[codeKey] || '').trim();
+                    let provinceVal = stateIdKey ? String(row[stateIdKey] || '').trim() : '';
+
+                    // Auto generate codeVal if empty but nameVal exists
+                    if (!codeVal && nameVal) {
+                        const cleanName = nameVal.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+                        codeVal = `${tipe}_${cleanName.substring(0, 15)}_${rowIdx++}`;
+                    }
+
+                    return {
+                        tipe: tipe,
+                        kode_daerah: codeVal,
+                        nama_daerah: nameVal,
+                        provinsi: provinceVal,
+                        nominal: nominalVal,
+                        year: parseInt(year)
+                    };
+                }).filter(item => item.nama_daerah);
+
+                if (items.length === 0) {
+                    showToast('No valid rows found in Excel sheet! Check header columns.', 'error');
+                    return;
+                }
+
+                const res = await fetch(`${API_URL}/minimum-wages`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ items: items })
+                });
+
+                if (res.ok) {
+                    tutupModalUploadUmr();
+                    umrCurrentPage = 1;
+                    renderUmrTable();
+                    showToast(`${items.length} ${tipe} data uploaded successfully!`, 'success');
+                } else {
+                    const errData = await res.json().catch(() => ({}));
+                    showToast(errData.message || 'Failed to upload data!', 'error');
+                }
+            } catch (err) {
+                console.error(err);
+                showToast('Error processing Excel file!', 'error');
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    });
+}
+
+// Manual UMR Form Handler
+const formManualUmr = document.getElementById('formManualUmr');
+if (formManualUmr) {
+    formManualUmr.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const data = {
+            items: [{
+                tipe: document.getElementById('manualUmrTipe').value,
+                kode_daerah: document.getElementById('manualUmrKode').value,
+                nama_daerah: document.getElementById('manualUmrNama').value,
+                nominal: parseFloat(document.getElementById('manualUmrNominal').value) || 0,
+                year: parseInt(document.getElementById('manualUmrYear').value)
+            }]
+        };
+
+        try {
+            const res = await fetch(`${API_URL}/minimum-wages`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+
+            if (res.ok) {
+                tutupModalManualUmr();
+                renderUmrTable();
+                showToast('Data saved successfully!', 'success');
+            } else {
+                showToast('Failed to save data!', 'error');
+            }
+        } catch (err) {
+            console.error(err);
+            showToast('System error occurred!', 'error');
+        }
+    });
+}
+
+// ===== SIMULASI GAJI MODULE =====
+
+async function loadSimulasiRegions() {
+    const type = document.getElementById('simulasiType').value;
+    if (type === 'NOMINAL') {
+        const savedNominal = localStorage.getItem('simulasi_nominal');
+        const select = document.getElementById('simulasiRegion');
+        if (savedNominal) {
+            const formatted = new Intl.NumberFormat('id-ID').format(savedNominal);
+            select.innerHTML = `<option value="NOMINAL">Agreed Nominal (Rp ${formatted})</option>`;
+            simulasiAllData = [{ id: 'NOMINAL', nama_daerah: 'Agreed Nominal', nominal: savedNominal }];
+        } else {
+            select.innerHTML = `<option value="">No nominal saved yet</option>`;
+            simulasiAllData = [];
+        }
+        return;
+    }
+    try {
+        const res = await fetch(`${API_URL}/minimum-wages?tipe=${type}`);
+        let dbData = await res.json();
+
+        // Data Default 38 Province (Update 2026 Projection)
+        const defaultUmp = [
+            { id: 'ID 11', nama_daerah: 'ACEH', nominal: 3000000 },
+            { id: 'ID 12', nama_daerah: 'SUMATERA UTARA', nominal: 4000000 },
+            { id: 'ID 17', nama_daerah: 'BENGKULU', nominal: 2000000 },
+            { id: 'ID 15', nama_daerah: 'JAMBI', nominal: 2000000 },
+            { id: 'ID 14', nama_daerah: 'RIAU', nominal: 2000000 },
+            { id: 'ID 13', nama_daerah: 'SUMATERA BARAT', nominal: 2000000 },
+            { id: 'ID 16', nama_daerah: 'SUMATERA SELATAN', nominal: 2000000 },
+            { id: 'ID 18', nama_daerah: 'LAMPUNG', nominal: 2000000 },
+            { id: 'ID 19', nama_daerah: 'KEP. BANGKA BELITUNG', nominal: 2000000 },
+            { id: 'ID 21', nama_daerah: 'KEP. RIAU', nominal: 2000000 },
+            { id: 'ID 36', nama_daerah: 'BANTEN', nominal: 2000000 },
+            { id: 'ID 32', nama_daerah: 'JAWA BARAT', nominal: 2000000 },
+            { id: 'ID 31', nama_daerah: 'DKI JAKARTA', nominal: 2000000 },
+            { id: 'ID 33', nama_daerah: 'JAWA TENGAH', nominal: 2000000 },
+            { id: 'ID 35', nama_daerah: 'JAWA TIMUR', nominal: 2000000 },
+            { id: 'ID 34', nama_daerah: 'DI YOGYAKARTA', nominal: 2000000 },
+            { id: 'ID 51', nama_daerah: 'BALI', nominal: 2000000 },
+            { id: 'ID 52', nama_daerah: 'NUSA TENGGARA BARAT', nominal: 2000000 },
+            { id: 'ID 53', nama_daerah: 'NUSA TENGGARA TIMUR', nominal: 2000000 },
+            { id: 'ID 61', nama_daerah: 'KALIMANTAN BARAT', nominal: 2000000 },
+            { id: 'ID 63', nama_daerah: 'KALIMANTAN SELATAN', nominal: 2000000 },
+            { id: 'ID 62', nama_daerah: 'KALIMANTAN TENGAH', nominal: 2000000 },
+            { id: 'ID 64', nama_daerah: 'KALIMANTAN TIMUR', nominal: 2000000 },
+            { id: 'ID 75', nama_daerah: 'GORONTALO', nominal: 2000000 },
+            { id: 'ID 73', nama_daerah: 'SULAWESI SELATAN', nominal: 2000000 },
+            { id: 'ID 74', nama_daerah: 'SULAWESI TENGGARA', nominal: 2000000 },
+            { id: 'ID 72', nama_daerah: 'SULAWESI TENGAH', nominal: 2000000 },
+            { id: 'ID 71', nama_daerah: 'SULAWESI UTARA', nominal: 2000000 },
+            { id: 'ID 76', nama_daerah: 'SULAWESI BARAT', nominal: 2000000 },
+            { id: 'ID 81', nama_daerah: 'MALUKU', nominal: 2000000 },
+            { id: 'ID 82', nama_daerah: 'MALUKU UTARA', nominal: 2000000 },
+            { id: 'ID 91', nama_daerah: 'PAPUA', nominal: 1000000 },
+            { id: 'ID 92', nama_daerah: 'PAPUA BARAT', nominal: 2000000 },
+            { id: 'ID 65', nama_daerah: 'KALIMANTAN UTARA', nominal: 2000000 }
+        ];
+
+        // Data Default Kota Besar (UMK 2024 - Full Indonesia Eksak)
+        const defaultUmk = [
+            { id: '1300000', nama_daerah: 'Jakarta', nominal: 7000000 },
+            { id: 'ID 11.16', nama_daerah: 'KAB. ACEH TAMIANG', nominal: 1000000 },
+            { id: 'ID 11.04', nama_daerah: 'KAB. ACEH TENGAH', nominal: 1000000 },
+            { id: 'ID 11.03', nama_daerah: 'KAB. ACEH TIMUR', nominal: 1000000 },
+            { id: 'ID 12.09', nama_daerah: 'KAB. ASAHAN', nominal: 1000000 },
+            { id: 'ID 51.03', nama_daerah: 'KAB. BADUNG', nominal: 5000000 },
+            { id: 'ID 32.04', nama_daerah: 'KAB. BANDUNG', nominal: 1000000 },
+            { id: 'ID 32.17', nama_daerah: 'KAB. BANDUNG BARAT', nominal: 1000000 },
+            { id: 'ID 72.01', nama_daerah: 'KAB. BANGGAI', nominal: 1000000 },
+            { id: 'ID 35.26', nama_daerah: 'KAB. BANGKALAN', nominal: 1000000 },
+            { id: 'ID 33.04', nama_daerah: 'KAB. BANJARNEGARA', nominal: 1000000 },
+            { id: 'ID 73.03', nama_daerah: 'KAB. BANTAENG', nominal: 1000000 },
+            { id: 'ID 34.02', nama_daerah: 'KAB. BANTUL', nominal: 1000000 },
+            { id: 'ID 16.07', nama_daerah: 'KAB. BANYUASIN', nominal: 1000000 },
+            { id: 'ID 33.02', nama_daerah: 'KAB. BANYUMAS', nominal: 1000000 },
+            { id: 'ID 35.10', nama_daerah: 'KAB. BANYUWANGI', nominal: 1000000 },
+            { id: 'ID 73.11', nama_daerah: 'KAB. BARRU', nominal: 1000000 },
+            { id: 'ID 33.25', nama_daerah: 'KAB. BATANG', nominal: 1000000 },
+            { id: 'ID 12.19', nama_daerah: 'KAB. BATU BARA', nominal: 1000000 },
+            { id: 'ID 32.16', nama_daerah: 'KAB. BEKASI', nominal: 1000000 },
+            { id: 'ID 19.02', nama_daerah: 'KAB. BELITUNG', nominal: 1000000 },
+            { id: 'ID 14.03', nama_daerah: 'KAB. BENGKALIS', nominal: 1000000 },
+            { id: 'ID 17.01', nama_daerah: 'KAB. BENGKULU SELATAN', nominal: 1000000 },
+            { id: 'ID 64.03', nama_daerah: 'KAB. BERAU', nominal: 1000000 },
+            { id: 'ID 11.11', nama_daerah: 'KAB. BIREUEN', nominal: 1000000 },
+            { id: 'ID 33.16', nama_daerah: 'KAB. BLORA', nominal: 1000000 },
+            { id: 'ID 32.01', nama_daerah: 'KAB. BOGOR', nominal: 1000000 },
+            { id: 'ID 35.22', nama_daerah: 'KAB. BOJONEGORO', nominal: 1000000 },
+            { id: 'ID 35.11', nama_daerah: 'KAB. BONDOWOSO', nominal: 1000000 },
+            { id: 'ID 73.08', nama_daerah: 'KAB. BONE', nominal: 1000000 },
+            { id: 'ID 33.09', nama_daerah: 'KAB. BOYOLALI', nominal: 1000000 },
+            { id: 'ID 33.29', nama_daerah: 'KAB. BREBES', nominal: 1000000 },
+            { id: 'ID 51.08', nama_daerah: 'KAB. BULELENG', nominal: 1000000 },
+            { id: 'ID 73.02', nama_daerah: 'KAB. BULUKUMBA', nominal: 1000000 },
+            { id: 'ID 65.01', nama_daerah: 'KAB. BULUNGAN', nominal: 1000000 },
+            { id: 'ID 15.08', nama_daerah: 'KAB. BUNGO', nominal: 1000000 },
+            { id: 'ID 32.07', nama_daerah: 'KAB. CIAMIS', nominal: 1000000 },
+            { id: 'ID 32.03', nama_daerah: 'KAB. CIANJUR', nominal: 1000000 },
+            { id: 'ID 33.01', nama_daerah: 'KAB. CILACAP', nominal: 1000000 },
+            { id: 'ID 32.09', nama_daerah: 'KAB. CIREBON', nominal: 1000000 },
+            { id: 'ID 12.07', nama_daerah: 'KAB. DELI SERDANG', nominal: 1000000 },
+            { id: 'ID 33.21', nama_daerah: 'KAB. DEMAK', nominal: 1000000 },
+            { id: 'ID 13.10', nama_daerah: 'KAB. DHARMASRAYA', nominal: 1000000 },
+            { id: 'ID 53.08', nama_daerah: 'KAB. ENDE', nominal: 1000000 },
+            { id: 'ID 73.16', nama_daerah: 'KAB. ENREKANG', nominal: 1000000 },
+            { id: 'ID 32.05', nama_daerah: 'KAB. GARUT', nominal: 1000000 },
+            { id: 'ID 51.04', nama_daerah: 'KAB. GIANYAR', nominal: 1000000 },
+            { id: 'ID 75.01', nama_daerah: 'KAB. GORONTALO', nominal: 1000000 },
+            { id: 'ID 73.06', nama_daerah: 'KAB. GOWA', nominal: 1000000 },
+            { id: 'ID 35.25', nama_daerah: 'KAB. GRESIK', nominal: 1000000 },
+            { id: 'ID 33.15', nama_daerah: 'KAB. GROBOGAN', nominal: 1000000 },
+            { id: 'ID 63.07', nama_daerah: 'KAB. HULU SUNGAI TENGAH', nominal: 1000000 },
+            { id: 'ID 63.08', nama_daerah: 'KAB. HULU SUNGAI UTARA', nominal: 1000000 },
+            { id: 'ID 14.04', nama_daerah: 'KAB. INDRAGIRI HILIR', nominal: 1000000 },
+            { id: 'ID 14.02', nama_daerah: 'KAB. INDRAGIRI HULU', nominal: 1000000 },
+            { id: 'ID 32.12', nama_daerah: 'KAB. INDRAMAYU', nominal: 1000000 },
+            { id: 'ID 91.03', nama_daerah: 'KAB. JAYAPURA', nominal: 1000000 },
+            { id: 'ID 35.09', nama_daerah: 'KAB. JEMBER', nominal: 1000000 },
+            { id: 'ID 51.01', nama_daerah: 'KAB. JEMBRANA', nominal: 1000000 },
+            { id: 'ID 73.04', nama_daerah: 'KAB. JENEPONTO', nominal: 1000000 },
+            { id: 'ID 33.20', nama_daerah: 'KAB. JEPARA', nominal: 1000000 },
+            { id: 'ID 35.17', nama_daerah: 'KAB. JOMBANG', nominal: 1000000 },
+            { id: 'ID 14.01', nama_daerah: 'KAB. KAMPAR', nominal: 1000000 },
+            { id: 'ID 62.03', nama_daerah: 'KAB. KAPUAS', nominal: 1000000 },
+            { id: 'ID 61.06', nama_daerah: 'KAB. KAPUAS HULU', nominal: 1000000 },
+            { id: 'ID 33.13', nama_daerah: 'KAB. KARANGANYAR', nominal: 1000000 },
+            { id: 'ID 32.15', nama_daerah: 'KAB. KARAWANG', nominal: 1000000 },
+            { id: 'ID 12.06', nama_daerah: 'KAB. KARO', nominal: 1000000 },
+            { id: 'ID 33.05', nama_daerah: 'KAB. KEBUMEN', nominal: 1000000 },
+            { id: 'ID 33.24', nama_daerah: 'KAB. KENDAL', nominal: 1000000 },
+            { id: 'ID 17.08', nama_daerah: 'KAB. KEPAHIANG', nominal: 1000000 },
+            { id: 'ID 61.04', nama_daerah: 'KAB. KETAPANG', nominal: 1000000 },
+            { id: 'ID 33.10', nama_daerah: 'KAB. KLATEN', nominal: 1000000 },
+            { id: 'ID 74.01', nama_daerah: 'KAB. KOLAKA', nominal: 1000000 },
+            { id: 'ID 63.02', nama_daerah: 'KAB. KOTABARU', nominal: 1000000 },
+            { id: 'ID 62.01', nama_daerah: 'KAB. KOTAWARINGIN BARAT', nominal: 1000000 },
+            { id: 'ID 62.02', nama_daerah: 'KAB. KOTAWARINGIN TIMUR', nominal: 1000000 },
+            { id: 'ID 61.12', nama_daerah: 'KAB. KUBU RAYA', nominal: 1000000 },
+            { id: 'ID 33.19', nama_daerah: 'KAB. KUDUS', nominal: 1000000 },
+            { id: 'ID 34.01', nama_daerah: 'KAB. KULON PROGO', nominal: 1000000 },
+            { id: 'ID 32.08', nama_daerah: 'KAB. KUNINGAN', nominal: 1000000 },
+            { id: 'ID 64.07', nama_daerah: 'KAB. KUTAI BARAT', nominal: 1000000 },
+            { id: 'ID 64.02', nama_daerah: 'KAB. KUTAI KARTANEGARA', nominal: 1000000 },
+            { id: 'ID 64.08', nama_daerah: 'KAB. KUTAI TIMUR', nominal: 1000000 },
+            { id: 'ID 12.10', nama_daerah: 'KAB. LABUHANBATU', nominal: 1000000 },
+            { id: 'ID 12.23', nama_daerah: 'KAB. LABUHANBATU UTARA', nominal: 1000000 },
+            { id: 'ID 16.04', nama_daerah: 'KAB. LAHAT', nominal: 1000000 },
+            { id: 'ID 35.24', nama_daerah: 'KAB. LAMONGAN', nominal: 1000000 },
+            { id: 'ID 18.04', nama_daerah: 'KAB. LAMPUNG BARAT', nominal: 1000000 },
+            { id: 'ID 18.01', nama_daerah: 'KAB. LAMPUNG SELATAN', nominal: 1000000 },
+            { id: 'ID 18.02', nama_daerah: 'KAB. LAMPUNG TENGAH', nominal: 1000000 },
+            { id: 'ID 18.07', nama_daerah: 'KAB. LAMPUNG TIMUR', nominal: 1000000 },
+            { id: 'ID 18.03', nama_daerah: 'KAB. LAMPUNG UTARA', nominal: 1000000 },
+            { id: 'ID 61.08', nama_daerah: 'KAB. LANDAK', nominal: 1000000 },
+            { id: 'ID 12.05', nama_daerah: 'KAB. LANGKAT', nominal: 1000000 },
+            { id: 'ID 36.02', nama_daerah: 'KAB. LEBAK', nominal: 1000000 },
+            { id: 'ID 52.01', nama_daerah: 'KAB. LOMBOK BARAT', nominal: 1000000 },
+            { id: 'ID 52.02', nama_daerah: 'KAB. LOMBOK TENGAH', nominal: 1000000 },
+            { id: 'ID 52.03', nama_daerah: 'KAB. LOMBOK TIMUR', nominal: 1000000 },
+            { id: 'ID 35.08', nama_daerah: 'KAB. LUMAJANG', nominal: 1000000 },
+            { id: 'ID 73.17', nama_daerah: 'KAB. LUWU', nominal: 1000000 },
+            { id: 'ID 73.24', nama_daerah: 'KAB. LUWU TIMUR', nominal: 1000000 },
+            { id: 'ID 73.22', nama_daerah: 'KAB. LUWU UTARA', nominal: 1000000 },
+            { id: 'ID 35.19', nama_daerah: 'KAB. MADIUN', nominal: 1000000 },
+            { id: 'ID 33.08', nama_daerah: 'KAB. MAGELANG', nominal: 1000000 },
+            { id: 'ID 35.20', nama_daerah: 'KAB. MAGETAN', nominal: 1000000 },
+            { id: 'ID 32.10', nama_daerah: 'KAB. MAJALENGKA', nominal: 1000000 },
+            { id: 'ID 76.05', nama_daerah: 'KAB. MAJENE', nominal: 1000000 },
+            { id: 'ID 35.07', nama_daerah: 'KAB. MALANG', nominal: 1000000 },
+            { id: 'ID 76.02', nama_daerah: 'KAB. MAMUJU', nominal: 1000000 },
+            { id: 'ID 12.13', nama_daerah: 'KAB. MANDAILING NATAL', nominal: 1000000 },
+            { id: 'ID 53.15', nama_daerah: 'KAB. MANGGARAI BARAT', nominal: 1000000 },
+            { id: 'ID 92.02', nama_daerah: 'KAB. MANOKWARI', nominal: 1000000 },
+            { id: 'ID 73.09', nama_daerah: 'KAB. MAROS', nominal: 1000000 },
+            { id: 'ID 61.10', nama_daerah: 'KAB. MELAWI', nominal: 1000000 },
+            { id: 'ID 15.02', nama_daerah: 'KAB. MERANGIN', nominal: 1000000 },
+            { id: 'ID 91.01', nama_daerah: 'KAB. MERAUKE', nominal: 1000000 },
+            { id: 'ID 91.09', nama_daerah: 'KAB. MIMIKA', nominal: 1000000 },
+            { id: 'ID 71.05', nama_daerah: 'KAB. MINAHASA SELATAN', nominal: 1000000 },
+            { id: 'ID 71.06', nama_daerah: 'KAB. MINAHASA UTARA', nominal: 1000000 },
+            { id: 'ID 35.16', nama_daerah: 'KAB. MOJOKERTO', nominal: 1000000 },
+            { id: 'ID 72.06', nama_daerah: 'KAB. MOROWALI', nominal: 1000000 },
+            { id: 'ID 16.03', nama_daerah: 'KAB. MUARA ENIM', nominal: 1000000 },
+            { id: 'ID 16.06', nama_daerah: 'KAB. MUSI BANYUASIN', nominal: 1000000 },
+            { id: 'ID 91.04', nama_daerah: 'KAB. NABIRE', nominal: 1000000 },
+            { id: 'ID 35.18', nama_daerah: 'KAB. NGANJUK', nominal: 1000000 },
+            { id: 'ID 35.21', nama_daerah: 'KAB. NGAWI', nominal: 1000000 },
+            { id: 'ID 16.10', nama_daerah: 'KAB. OGAN ILIR', nominal: 1000000 },
+            { id: 'ID 16.02', nama_daerah: 'KAB. OGAN KOMERING ILIR', nominal: 1000000 },
+            { id: 'ID 16.01', nama_daerah: 'KAB. OGAN KOMERING ULU', nominal: 1000000 },
+            { id: 'ID 16.09', nama_daerah: 'KAB. OGAN KOMERING ULU SELATAN', nominal: 1000000 },
+            { id: 'ID 16.08', nama_daerah: 'KAB. OGAN KOMERING ULU TIMUR', nominal: 1000000 },
+            { id: 'ID 35.01', nama_daerah: 'KAB. PACITAN', nominal: 1000000 },
+            { id: 'ID 35.28', nama_daerah: 'KAB. PAMEKASAN', nominal: 1000000 },
+            { id: 'ID 36.01', nama_daerah: 'KAB. PANDEGLANG', nominal: 1000000 },
+            { id: 'ID 32.18', nama_daerah: 'KAB. PANGANDARAN', nominal: 1000000 },
+            { id: 'ID 73.10', nama_daerah: 'KAB. PANGKAJENE KEPULAUAN', nominal: 1000000 },
+            { id: 'ID 13.12', nama_daerah: 'KAB. PASAMAN BARAT', nominal: 1000000 },
+            { id: 'ID 35.14', nama_daerah: 'KAB. PASURUAN', nominal: 1000000 },
+            { id: 'ID 33.18', nama_daerah: 'KAB. PATI', nominal: 1000000 },
+            { id: 'ID 33.26', nama_daerah: 'KAB. PEKALONGAN', nominal: 1000000 },
+            { id: 'ID 14.05', nama_daerah: 'KAB. PELALAWAN', nominal: 1000000 },
+            { id: 'ID 33.27', nama_daerah: 'KAB. PEMALANG', nominal: 1000000 },
+            { id: 'ID 64.09', nama_daerah: 'KAB. PENAJAM PASER UTARA', nominal: 1000000 },
+            { id: 'ID 18.09', nama_daerah: 'KAB. PESAWARAN', nominal: 1000000 },
+            { id: 'ID 13.01', nama_daerah: 'KAB. PESISIR SELATAN', nominal: 1000000 },
+            { id: 'ID 11.07', nama_daerah: 'KAB. PIDIE', nominal: 1000000 },
+            { id: 'ID 73.15', nama_daerah: 'KAB. PINRANG', nominal: 1000000 },
+            { id: 'ID 76.04', nama_daerah: 'KAB. POLEWALI MANDAR', nominal: 1000000 },
+            { id: 'ID 35.02', nama_daerah: 'KAB. PONOROGO', nominal: 1000000 },
+            { id: 'ID 18.10', nama_daerah: 'KAB. PRINGSEWU', nominal: 1000000 },
+            { id: 'ID 35.13', nama_daerah: 'KAB. PROBOLINGGO', nominal: 1000000 },
+            { id: 'ID 33.03', nama_daerah: 'KAB. PURBALINGGA', nominal: 1000000 },
+            { id: 'ID 32.14', nama_daerah: 'KAB. PURWAKARTA', nominal: 1000000 },
+            { id: 'ID 33.06', nama_daerah: 'KAB. PURWOREJO', nominal: 1000000 },
+            { id: 'ID 17.02', nama_daerah: 'KAB. REJANG LEBONG', nominal: 1000000 },
+            { id: 'ID 33.17', nama_daerah: 'KAB. REMBANG', nominal: 1000000 },
+            { id: 'ID 14.07', nama_daerah: 'KAB. ROKAN HILIR', nominal: 1000000 },
+            { id: 'ID 14.06', nama_daerah: 'KAB. ROKAN HULU', nominal: 1000000 },
+            { id: 'ID 61.03', nama_daerah: 'KAB. SANGGAU', nominal: 1000000 },
+            { id: 'ID 15.03', nama_daerah: 'KAB. SAROLANGUN', nominal: 1000000 },
+            { id: 'ID 33.22', nama_daerah: 'KAB. SEMARANG', nominal: 1000000 },
+            { id: 'ID 36.04', nama_daerah: 'KAB. SERANG', nominal: 1000000 },
+            { id: 'ID 12.18', nama_daerah: 'KAB. SERDANG BEDAGAI', nominal: 1000000 },
+            { id: 'ID 14.08', nama_daerah: 'KAB. SIAK', nominal: 1000000 },
+            { id: 'ID 73.14', nama_daerah: 'KAB. SIDENRENG RAPPANG', nominal: 1000000 },
+            { id: 'ID 35.15', nama_daerah: 'KAB. SIDOARJO', nominal: 1000000 },
+            { id: 'ID 72.10', nama_daerah: 'KAB. SIGI', nominal: 1000000 },
+            { id: 'ID 73.07', nama_daerah: 'KAB. SINJAI', nominal: 1000000 },
+            { id: 'ID 61.05', nama_daerah: 'KAB. SINTANG', nominal: 1000000 },
+            { id: 'ID 35.12', nama_daerah: 'KAB. SITUBONDO', nominal: 1000000 },
+            { id: 'ID 34.04', nama_daerah: 'KAB. SLEMAN', nominal: 1000000 },
+            { id: 'ID 73.12', nama_daerah: 'KAB. SOPPENG', nominal: 1000000 },
+            { id: 'ID 92.01', nama_daerah: 'KAB. SORONG', nominal: 1000000 },
+            { id: 'ID 33.14', nama_daerah: 'KAB. SRAGEN', nominal: 1000000 },
+            { id: 'ID 32.13', nama_daerah: 'KAB. SUBANG', nominal: 1000000 },
+            { id: 'ID 32.02', nama_daerah: 'KAB. SUKABUMI', nominal: 1000000 },
+            { id: 'ID 33.11', nama_daerah: 'KAB. SUKOHARJO', nominal: 1000000 },
+            { id: 'ID 52.04', nama_daerah: 'KAB. SUMBAWA', nominal: 1000000 },
+            { id: 'ID 32.11', nama_daerah: 'KAB. SUMEDANG', nominal: 1000000 },
+            { id: 'ID 35.29', nama_daerah: 'KAB. SUMENEP', nominal: 1000000 },
+            { id: 'ID 63.09', nama_daerah: 'KAB. TABALONG', nominal: 1000000 },
+            { id: 'ID 51.02', nama_daerah: 'KAB. TABANAN', nominal: 1000000 },
+            { id: 'ID 73.05', nama_daerah: 'KAB. TAKALAR', nominal: 1000000 },
+            { id: 'ID 73.18', nama_daerah: 'KAB. TANA TORAJA', nominal: 1000000 },
+            { id: 'ID 63.10', nama_daerah: 'KAB. TANAH BUMBU', nominal: 1000000 },
+            { id: 'ID 63.01', nama_daerah: 'KAB. TANAH LAUT', nominal: 1000000 },
+            { id: 'ID 36.03', nama_daerah: 'KAB. TANGERANG', nominal: 1000000 },
+            { id: 'ID 18.06', nama_daerah: 'KAB. TANGGAMUS', nominal: 1000000 },
+            { id: 'ID 12.02', nama_daerah: 'KAB. TAPANULI UTARA', nominal: 1000000 },
+            { id: 'ID 63.05', nama_daerah: 'KAB. TAPIN', nominal: 1000000 },
+            { id: 'ID 32.06', nama_daerah: 'KAB. TASIKMALAYA', nominal: 1000000 },
+            { id: 'ID 15.09', nama_daerah: 'KAB. TEBO', nominal: 1000000 },
+            { id: 'ID 33.28', nama_daerah: 'KAB. TEGAL', nominal: 1000000 },
+            { id: 'ID 33.23', nama_daerah: 'KAB. TEMANGGUNG', nominal: 1000000 },
+            { id: 'ID 12.12', nama_daerah: 'KAB. TOBA SAMOSIR', nominal: 1000000 },
+            { id: 'ID 73.26', nama_daerah: 'KAB. TORAJA UTARA', nominal: 1000000 },
+            { id: 'ID 35.23', nama_daerah: 'KAB. TUBAN', nominal: 1000000 },
+            { id: 'ID 18.05', nama_daerah: 'KAB. TULANG BAWANG', nominal: 1000000 },
+            { id: 'ID 35.04', nama_daerah: 'KAB. TULUNGAGUNG', nominal: 1000000 },
+            { id: 'ID 73.13', nama_daerah: 'KAB. WAJO', nominal: 1000000 },
+            { id: 'ID 33.12', nama_daerah: 'KAB. WONOGIRI', nominal: 1000000 },
+            { id: 'ID 33.07', nama_daerah: 'KAB. WONOSOBO', nominal: 1000000 },
+            { id: 'ID 31.73', nama_daerah: 'KOTA ADM. JAKARTA BARAT', nominal: 1000000 },
+            { id: 'ID 31.71', nama_daerah: 'KOTA ADM. JAKARTA PUSAT', nominal: 1000000 },
+            { id: 'ID 31.74', nama_daerah: 'KOTA ADM. JAKARTA SELATAN', nominal: 1000000 },
+            { id: 'ID 31.75', nama_daerah: 'KOTA ADM. JAKARTA TIMUR', nominal: 1000000 },
+            { id: 'ID 31.72', nama_daerah: 'KOTA ADM. JAKARTA UTARA', nominal: 1000000 },
+            { id: 'ID 81.71', nama_daerah: 'KOTA AMBON', nominal: 1000000 },
+            { id: 'ID 64.71', nama_daerah: 'KOTA BALIKPAPAN', nominal: 1000000 },
+            { id: 'ID 11.71', nama_daerah: 'KOTA BANDA ACEH', nominal: 1000000 },
+            { id: 'ID 18.71', nama_daerah: 'KOTA BANDAR LAMPUNG', nominal: 1000000 },
+            { id: 'ID 32.73', nama_daerah: 'KOTA BANDUNG', nominal: 1000000 },
+            { id: 'ID 32.79', nama_daerah: 'KOTA BANJAR', nominal: 1000000 },
+            { id: 'ID 63.72', nama_daerah: 'KOTA BANJARBARU', nominal: 1000000 },
+            { id: 'ID 63.71', nama_daerah: 'KOTA BANJARMASIN', nominal: 1000000 },
+            { id: 'ID 21.71', nama_daerah: 'KOTA BATAM', nominal: 1000000 },
+            { id: 'ID 35.79', nama_daerah: 'KOTA BATU', nominal: 1000000 },
+            { id: 'ID 74.72', nama_daerah: 'KOTA BAU BAU', nominal: 1000000 },
+            { id: 'ID 32.75', nama_daerah: 'KOTA BEKASI', nominal: 1000000 },
+            { id: 'ID 17.71', nama_daerah: 'KOTA BENGKULU', nominal: 1000000 },
+            { id: 'ID 12.75', nama_daerah: 'KOTA BINJAI', nominal: 1000000 },
+            { id: 'ID 71.72', nama_daerah: 'KOTA BITUNG', nominal: 1000000 },
+            { id: 'ID 35.72', nama_daerah: 'KOTA BLITAR', nominal: 1000000 },
+            { id: 'ID 32.71', nama_daerah: 'KOTA BOGOR', nominal: 1000000 },
+            { id: 'ID 64.74', nama_daerah: 'KOTA BONTANG', nominal: 1000000 },
+            { id: 'ID 13.75', nama_daerah: 'KOTA BUKITTINGGI', nominal: 1000000 },
+            { id: 'ID 36.72', nama_daerah: 'KOTA CILEGON', nominal: 1000000 },
+            { id: 'ID 32.77', nama_daerah: 'KOTA CIMAHI', nominal: 1000000 },
+            { id: 'ID 32.74', nama_daerah: 'KOTA CIREBON', nominal: 1000000 },
+            { id: 'ID 51.71', nama_daerah: 'KOTA DENPASAR', nominal: 1000000 },
+            { id: 'ID 32.76', nama_daerah: 'KOTA DEPOK', nominal: 1000000 },
+            { id: 'ID 14.72', nama_daerah: 'KOTA DUMAI', nominal: 1000000 },
+            { id: 'ID 75.71', nama_daerah: 'KOTA GORONTALO', nominal: 1000000 },
+            { id: 'ID 15.71', nama_daerah: 'KOTA JAMBI', nominal: 1000000 },
+            { id: 'ID 91.71', nama_daerah: 'KOTA JAYAPURA', nominal: 1000000 },
+            { id: 'ID 35.71', nama_daerah: 'KOTA KEDIRI', nominal: 1000000 },
+            { id: 'ID 74.71', nama_daerah: 'KOTA KENDARI', nominal: 1000000 },
+            { id: 'ID 71.74', nama_daerah: 'KOTA KOTAMOBAGU', nominal: 1000000 },
+            { id: 'ID 53.71', nama_daerah: 'KOTA KUPANG', nominal: 1000000 },
+            { id: 'ID 11.74', nama_daerah: 'KOTA LANGSA', nominal: 1000000 },
+            { id: 'ID 11.73', nama_daerah: 'KOTA LHOKSEUMAWE', nominal: 1000000 },
+            { id: 'ID 16.73', nama_daerah: 'KOTA LUBUK LINGGAU', nominal: 1000000 },
+            { id: 'ID 35.77', nama_daerah: 'KOTA MADIUN', nominal: 1000000 },
+            { id: 'ID 33.71', nama_daerah: 'KOTA MAGELANG', nominal: 1000000 },
+            { id: 'ID 73.71', nama_daerah: 'KOTA MAKASSAR', nominal: 1000000 },
+            { id: 'ID 35.73', nama_daerah: 'KOTA MALANG', nominal: 1000000 },
+            { id: 'ID 71.71', nama_daerah: 'KOTA MANADO', nominal: 1000000 },
+            { id: 'ID 52.71', nama_daerah: 'KOTA MATARAM', nominal: 1000000 },
+            { id: 'ID 12.71', nama_daerah: 'KOTA MEDAN', nominal: 1000000 },
+            { id: 'ID 18.72', nama_daerah: 'KOTA METRO', nominal: 1000000 },
+            { id: 'ID 35.76', nama_daerah: 'KOTA MOJOKERTO', nominal: 1000000 },
+            { id: 'ID 13.71', nama_daerah: 'KOTA PADANG', nominal: 1000000 },
+            { id: 'ID 13.74', nama_daerah: 'KOTA PADANG PANJANG', nominal: 1000000 },
+            { id: 'ID 12.77', nama_daerah: 'KOTA PADANG SIDEMPUAN', nominal: 1000000 },
+            { id: 'ID 16.72', nama_daerah: 'KOTA PAGAR ALAM', nominal: 1000000 },
+            { id: 'ID 62.71', nama_daerah: 'KOTA PALANGKARAYA', nominal: 1000000 },
+            { id: 'ID 16.71', nama_daerah: 'KOTA PALEMBANG', nominal: 1000000 },
+            { id: 'ID 73.73', nama_daerah: 'KOTA PALOPO', nominal: 1000000 },
+            { id: 'ID 72.71', nama_daerah: 'KOTA PALU', nominal: 1000000 },
+            { id: 'ID 19.71', nama_daerah: 'KOTA PANGKAL PINANG', nominal: 1000000 },
+            { id: 'ID 73.72', nama_daerah: 'KOTA PARE PARE', nominal: 1000000 },
+            { id: 'ID 13.77', nama_daerah: 'KOTA PARIAMAN', nominal: 1000000 },
+            { id: 'ID 35.75', nama_daerah: 'KOTA PASURUAN', nominal: 1000000 },
+            { id: 'ID 13.76', nama_daerah: 'KOTA PAYAKUMBUH', nominal: 1000000 },
+            { id: 'ID 33.75', nama_daerah: 'KOTA PEKALONGAN', nominal: 1000000 },
+            { id: 'ID 14.71', nama_daerah: 'KOTA PEKANBARU', nominal: 1000000 },
+            { id: 'ID 12.72', nama_daerah: 'KOTA PEMATANGSIANTAR', nominal: 1000000 },
+            { id: 'ID 61.71', nama_daerah: 'KOTA PONTIANAK', nominal: 1000000 },
+            { id: 'ID 16.74', nama_daerah: 'KOTA PRABUMULIH', nominal: 1000000 },
+            { id: 'ID 35.74', nama_daerah: 'KOTA PROBOLINGGO', nominal: 1000000 },
+            { id: 'ID 33.73', nama_daerah: 'KOTA SALATIGA', nominal: 1000000 },
+            { id: 'ID 64.72', nama_daerah: 'KOTA SAMARINDA', nominal: 1000000 },
+            { id: 'ID 33.74', nama_daerah: 'KOTA SEMARANG', nominal: 1000000 },
+            { id: 'ID 36.73', nama_daerah: 'KOTA SERANG', nominal: 1000000 },
+            { id: 'ID 12.73', nama_daerah: 'KOTA SIBOLGA', nominal: 1000000 },
+            { id: 'ID 61.72', nama_daerah: 'KOTA SINGKAWANG', nominal: 1000000 },
+            { id: 'ID 13.72', nama_daerah: 'KOTA SOLOK', nominal: 1000000 },
+            { id: 'ID 92.71', nama_daerah: 'KOTA SORONG', nominal: 1000000 },
+            { id: 'ID 32.72', nama_daerah: 'KOTA SUKABUMI', nominal: 1000000 },
+            { id: 'ID 15.72', nama_daerah: 'KOTA SUNGAI PENUH', nominal: 1000000 },
+            { id: 'ID 35.78', nama_daerah: 'KOTA SURABAYA', nominal: 1000000 },
+            { id: 'ID 33.72', nama_daerah: 'KOTA SURAKARTA', nominal: 1000000 },
+            { id: 'ID 36.71', nama_daerah: 'KOTA TANGERANG', nominal: 1000000 },
+            { id: 'ID 36.74', nama_daerah: 'KOTA TANGERANG SELATAN', nominal: 1000000 },
+            { id: 'ID 12.74', nama_daerah: 'KOTA TANJUNG BALAI', nominal: 1000000 },
+            { id: 'ID 21.72', nama_daerah: 'KOTA TANJUNG PINANG', nominal: 1000000 },
+            { id: 'ID 65.71', nama_daerah: 'KOTA TARAKAN', nominal: 1000000 },
+            { id: 'ID 32.78', nama_daerah: 'KOTA TASIKMALAYA', nominal: 1000000 },
+            { id: 'ID 12.76', nama_daerah: 'KOTA TEBING TINGGI', nominal: 1000000 },
+            { id: 'ID 33.76', nama_daerah: 'KOTA TEGAL', nominal: 1000000 },
+            { id: 'ID 82.71', nama_daerah: 'KOTA TERNATE', nominal: 1000000 },
+            { id: 'ID 71.73', nama_daerah: 'KOTA TOMOHON', nominal: 1000000 },
+            { id: 'ID 34.71', nama_daerah: 'KOTA YOGYAKARTA', nominal: 1000000 },
+            { id: 'MYS-00001', nama_daerah: 'Malaysia', nominal: 1000000 },
+            { id: 'SIN-01001', nama_daerah: 'Singapore', nominal: 1000000 }
+        ];
+
+        // Ambil data dari DB (jika ada) atau gunakan default
+        if (type === 'UMP') {
+            simulasiAllData = dbData.length > 0 ? dbData : defaultUmp;
+        } else {
+            simulasiAllData = dbData.length > 0 ? dbData : defaultUmk;
+        }
+
+        const select = document.getElementById('simulasiRegion');
+        const placeholderText = type === 'UMP' ? '-- Select Province --' : '-- Select City/Regency --';
+        select.innerHTML = `<option value="">${placeholderText}</option>` +
+            simulasiAllData.map(r => `<option value="${r.id}">${r.nama_daerah}</option>`).join('');
+    } catch (err) { console.error(err); }
+}
+
+function hitungSimulasiGaji() {
+    const regionId = document.getElementById('simulasiRegion').value;
+    const region = simulasiAllData.find(r => r.id == regionId);
+    if (!region) return;
+    const basic = parseFloat(region.nominal);
+    const allowance = basic * 0.1; // Estimasi 10%
+    const total = basic + allowance;
+
+    document.getElementById('simBasic').innerText = formatNominal(basic);
+    document.getElementById('simAllowance').innerText = formatNominal(allowance);
+    document.getElementById('simTotal').innerText = formatNominal(total);
+
+    document.getElementById('simulasiResult').style.display = 'block';
+    document.getElementById('simulasiResult').scrollIntoView({ behavior: 'smooth' });
+}
+
+// Function to format Rupiah as the user types
+function formatRupiahInput(element) {
+    let value = element.value.replace(/[^,\d]/g, '').toString();
+    let split = value.split(',');
+    let remaining = split[0].length % 3;
+    let rupiah = split[0].substr(0, remaining);
+    let ribuan = split[0].substr(remaining).match(/\d{3}/gi);
+
+    if (ribuan) {
+        let separator = remaining ? '.' : '';
+        rupiah += separator + ribuan.join('.');
+    }
+
+    rupiah = split[1] != undefined ? rupiah + ',' + split[1] : rupiah;
+    element.value = rupiah ? rupiah : '';
+}
+
+// Function to handle save Nominal
+function simpanNominalManual() {
+    const inputVal = document.getElementById('inputUmrNominal').value;
+    const nominal = parseInt(inputVal.replace(/\./g, ''));
+    if (!nominal || nominal <= 0) {
+        showToast('Please enter a valid salary nominal!', 'error');
+        return;
+    }
+
+    localStorage.setItem('simulasi_nominal', nominal);
+    showToast('Nominal Rp ' + inputVal + ' saved successfully for simulation.', 'success');
+    document.getElementById('inputUmrNominal').value = '';
+    updateNominalDisplay();
+}
+
+function updateNominalDisplay() {
+    const savedNominal = localStorage.getItem('simulasi_nominal');
+    const displayDiv = document.getElementById('displayNominalTersimpan');
+    const valSpan = document.getElementById('valNominalTersimpan');
+    if (displayDiv && valSpan) {
+        if (savedNominal) {
+            valSpan.innerText = 'Rp ' + new Intl.NumberFormat('id-ID').format(parseInt(savedNominal));
+            displayDiv.style.display = 'block';
+        } else {
+            displayDiv.style.display = 'none';
+        }
+    }
+}

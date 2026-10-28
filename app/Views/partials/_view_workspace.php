@@ -1,0 +1,479 @@
+            <!-- Section: Client Workspace -->
+            <div id="viewClientWorkspace" class="view-section">
+                <!-- Header with Client Name and Back Button -->
+                <div class="workspace-header" style="margin-bottom: 25px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 15px;">
+                        <div style="display: flex; align-items: center; gap: 15px;">
+                            <?php if (($_COOKIE['user_role'] ?? '') !== 'staff'): ?>
+                            <button class="btn-back" onclick="backToClientList()">
+                                <i class="fas fa-arrow-left"></i> Back
+                            </button>
+                            <?php endif; ?>
+                            <h2 id="clientWorkspaceTitle" style="font-size: 22px; font-weight: 700; color: var(--secondary-color); margin: 0;">-</h2>
+                        </div>
+                        <div id="clientWorkspaceMeta" style="font-size: 14px; color: var(--text-muted); font-weight: 500;">
+                            Sector: <strong id="clientWorkspaceSector" style="color: var(--primary-color);">-</strong>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Workspace Tabs (Horizontal below client name) -->
+                <?php if (($_COOKIE['user_role'] ?? '') !== 'staff'): ?>
+                <div class="workspace-tabs">
+                    <button class="ws-tab active" data-wtab="karyawan" onclick="switchWorkspaceTab('karyawan')">Employee</button>
+                    <button class="ws-tab" data-wtab="structure" onclick="switchWorkspaceTab('structure')">Organization Structure</button>
+                    <button class="ws-tab" data-wtab="kompensasi" onclick="switchWorkspaceTab('kompensasi')">Scheme Choices</button>
+                    <button class="ws-tab" data-wtab="pkwt" onclick="switchWorkspaceTab('pkwt')">PKWT Contract</button>
+                    <button class="ws-tab" data-wtab="proses" onclick="switchWorkspaceTab('proses')">Process Payroll</button>
+                    <button class="ws-tab" data-wtab="report" onclick="switchWorkspaceTab('report')">Payroll Report</button>
+                </div>
+                <?php endif; ?>
+
+                <!-- Content Panels -->
+                <div class="workspace-content">
+                        <!-- Panel: Employee -->
+                        <div id="viewKaryawan" class="w-tab-panel active">
+                            <!-- Sub Tabs for Workspace Employee -->
+                            <div class="sub-tabs-container" style="display: flex; gap: 8px; border-bottom: 2px solid #f1f5f9; margin-bottom: 20px; padding-bottom: 2px;">
+                                <button class="sub-tab-btn active" id="subTabLokasiKerja" onclick="switchClientKaryawanSubTab('lokasi_kerja')" style="padding: 8px 16px; border: none; background: none; font-weight: 600; font-size: 13px; color: var(--primary-color); cursor: pointer; border-bottom: 2px solid var(--primary-color); margin-bottom: -2px; transition: all 0.2s ease; outline: none;">Work Location</button>
+                                <button class="sub-tab-btn" id="subTabKaryawanData" onclick="switchClientKaryawanSubTab('karyawan_data')" style="padding: 8px 16px; border: none; background: none; font-weight: 600; font-size: 13px; color: #64748b; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.2s ease; outline: none;">Employee Data</button>
+                            </div>
+
+                            <!-- Sub Panel 1: Work Location (Active by default) -->
+                            <div id="panelLokasiKerja" class="client-karyawan-subpanel">
+                                <div class="content-card">
+                                    <div class="section-header" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 15px; margin-bottom: 20px;">
+                                        <h3 style="font-size: 16px; color: var(--secondary-color); margin: 0;">Work Location List</h3>
+                                    </div>
+                                    <div class="table-container">
+                                        <table style="width: 100%;">
+                                            <thead>
+                                                <tr>
+                                                    <th>Work Location</th>
+                                                    <th>Location Code</th>
+                                                    <th>Province</th>
+                                                    <th>City/Regency</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="tabelLokasiKerjaBody">
+                                                <!-- Injected by JS -->
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Sub Panel 2: Employee Data -->
+                            <div id="panelKaryawanData" class="client-karyawan-subpanel" style="display: none;">
+                                <div class="content-card">
+                                    <div class="section-header" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 15px; margin-bottom: 20px;">
+                                        <h3 style="font-size: 16px; color: var(--secondary-color); margin: 0;">Employee Data</h3>
+                                        <div class="search-box" style="margin-bottom: 0;">
+                                            <i class="fas fa-search"></i>
+                                            <input type="text" id="searchKaryawan" placeholder="Search name or position..." onkeyup="filterKaryawan()">
+                                        </div>
+                                    </div>
+                                    <div class="table-container">
+                                        <table>
+                                            <thead>
+                                                <tr>
+                                                    <th>Company / Client</th>
+                                                    <th>Employee ID (NIK)</th>
+                                                    <th>Employee Name</th>
+                                                    <th>Place & Date of Birth</th>
+                                                    <th>NPWP</th>
+                                                    <th>Status PTKP</th>
+                                                    <th>Division</th>
+                                                    <th>Department</th>
+                                                    <th>Position / Role</th>
+                                                    <th>Work Location</th>
+                                                    <th>City/Regency</th>
+                                                    <th>Province</th>
+                                                    <th>Shift</th>
+                                                    <th>Min. Wage (UMP/UMK)</th>
+                                                    <th>Contract</th>
+                                                    <th>Action</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="tabelKaryawanBody">
+                                                <!-- Data injected by app.js -->
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Panel: Organization Structure -->
+                        <div id="viewStructure" class="w-tab-panel">
+                            <div class="content-card">
+                                <div class="section-header">
+                                    <h3 style="font-size: 16px; color: var(--secondary-color);">Organization Structure</h3>
+                                    <button class="btn-add" onclick="bukaModalOrg('division', 'tambah')">
+                                        <i class="fas fa-plus"></i> Add Division
+                                    </button>
+                                </div>
+
+                                <div id="clientOrgContainer" class="org-tree">
+                                    <!-- Organization hierarchy will be rendered here -->
+                                </div>
+                            </div>
+                        </div>
+
+
+                        <!-- Panel: Kontrak PKWT -->
+                        <div id="viewPkwt" class="w-tab-panel">
+                            <!-- Sub Tabs for Workspace PKWT -->
+                            <div class="sub-tabs-container" style="display: flex; gap: 8px; border-bottom: 2px solid #f1f5f9; margin-bottom: 20px; padding-bottom: 2px;">
+                                <button class="sub-tab-btn active" id="subTabPKWTData" onclick="switchClientPKWTSubTab('pkwt_data')" style="padding: 8px 16px; border: none; background: none; font-weight: 600; font-size: 13px; color: var(--primary-color); cursor: pointer; border-bottom: 2px solid var(--primary-color); margin-bottom: -2px; transition: all 0.2s ease; outline: none;">PKWT Contract List</button>
+                                <button class="sub-tab-btn" id="subTabPKWTKompensasi" onclick="switchClientPKWTSubTab('pkwt_kompensasi')" style="padding: 8px 16px; border: none; background: none; font-weight: 600; font-size: 13px; color: #64748b; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.2s ease; outline: none;">Contract Compensation</button>
+                            </div>
+
+                            <!-- Sub Panel 1: PKWT Contract List (Active by default) -->
+                            <div id="panelPKWTData" class="client-pkwt-subpanel">
+                                <div class="content-card">
+                                    <div class="section-header">
+                                        <h3 style="font-size: 16px; color: var(--secondary-color);">PKWT Contract List</h3>
+                                    </div>
+                                    <div class="table-container">
+                                        <table>
+                                            <thead>
+                                                <tr>
+                                                    <th>Employee</th>
+                                                    <th>Client</th>
+                                                    <th>Position</th>
+                                                    <th>Start Date</th>
+                                                    <th>End Date</th>
+                                                    <th>Basic Salary</th>
+                                                    <th>Action</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="tabelPKWTBody"></tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Sub Panel 2: Contract Compensation -->
+                            <div id="panelPKWTKompensasi" class="client-pkwt-subpanel" style="display: none;">
+                                <?= view('partials/_view_contract_compensation') ?>
+                            </div>
+                        </div>
+
+                        <!-- Panel: Process Payroll -->
+                        <div id="viewProcess" class="w-tab-panel">
+
+                            <!-- Payroll Period Filter Selector (Positioned above 5 Cards Grid) -->
+                            <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px 20px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.02);">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <i class="fas fa-calendar-alt" style="color: var(--primary-color); font-size: 16px;"></i>
+                                    <span style="font-size: 14px; font-weight: 700; color: #334155;">Period Payroll</span>
+                                </div>
+                                <div style="display: flex; gap: 12px; align-items: center;">
+                                    <span style="font-size: 13px; font-weight: 600; color: #64748b;">Payroll Period:</span>
+                                    <select id="processMonthSelect" onchange="onProcessPeriodChange()" style="padding: 8px 16px; border-radius: 8px; border: 1px solid #cbd5e0; outline: none; background: white; font-weight: 600; color: #4a5568; cursor: pointer; min-width: 130px;">
+                                        <option value="1">Januari</option><option value="2">Februari</option><option value="3">Maret</option>
+                                        <option value="4">April</option><option value="5">Mei</option><option value="6">Juni</option>
+                                        <option value="7">Juli</option><option value="8">Agustus</option><option value="9">September</option>
+                                        <option value="10">Oktober</option><option value="11">November</option><option value="12">Desember</option>
+                                    </select>
+                                    <select id="processYearSelect" onchange="onProcessPeriodChange()" style="padding: 8px 16px; border-radius: 8px; border: 1px solid #cbd5e0; outline: none; background: white; font-weight: 600; color: #4a5568; cursor: pointer; min-width: 100px;">
+                                        <?php 
+                                        $currentYear = intval(date('Y'));
+                                        for ($y = $currentYear - 2; $y <= $currentYear + 3; $y++) {
+                                            $selected = ($y === $currentYear) ? 'selected' : '';
+                                            echo "<option value=\"$y\" $selected>$y</option>";
+                                        }
+                                        ?>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- BPJS & Deductions Summary Cards Grid for Process Payroll -->
+                            <div class="stats-grid" style="margin-bottom: 25px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">
+                                <div class="stat-card" onclick="showProcessBpjsDetailModal('total_net_salary')" title="Click to view details Total Net Salary (Net Salary / Take Home Pay)" style="border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px 20px; background: #ffffff; cursor: pointer; transition: all 0.25s ease;" onmouseover="this.style.transform='translateY(-3px)'; this.style.boxShadow='0 8px 20px rgba(34, 197, 94, 0.15)';" onmouseout="this.style.transform='none'; this.style.boxShadow='none';">
+                                    <div style="display: flex; align-items: center; gap: 14px;">
+                                        <div class="stat-icon" style="background: rgba(34, 197, 94, 0.1); color: #16a34a; width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0;">
+                                            <i class="fas fa-wallet"></i>
+                                        </div>
+                                        <div>
+                                            <h4 id="kpiProcessTotalNetSalary" style="font-size: 15px; font-weight: 800; color: #16a34a; margin: 0;">Rp 0</h4>
+                                            <p style="font-size: 11px; color: #64748b; margin: 2px 0 0 0; font-weight: 600; display: flex; align-items: center;">Total Net Salary <i class="fas fa-external-link-alt" style="font-size: 9px; opacity: 0.5; margin-left: 4px;"></i></p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="stat-card" onclick="showProcessBpjsDetailModal('bpjs_kes_co')" title="Click to view calculation details BPJS Kes (Company)" style="border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px 20px; background: #ffffff; cursor: pointer; transition: all 0.25s ease;" onmouseover="this.style.transform='translateY(-3px)'; this.style.boxShadow='0 8px 20px rgba(14, 165, 233, 0.15)';" onmouseout="this.style.transform='none'; this.style.boxShadow='none';">
+                                    <div style="display: flex; align-items: center; gap: 14px;">
+                                        <div class="stat-icon" style="background: rgba(14, 165, 233, 0.1); color: #0284c7; width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0;">
+                                            <i class="fas fa-building-shield"></i>
+                                        </div>
+                                        <div>
+                                            <h4 id="kpiProcessBpjsKesCo" style="font-size: 15px; font-weight: 800; color: #1e293b; margin: 0;">Rp 0</h4>
+                                            <p style="font-size: 11px; color: #64748b; margin: 2px 0 0 0; font-weight: 600; display: flex; align-items: center;">BPJS Kes (Company) <i class="fas fa-external-link-alt" style="font-size: 9px; opacity: 0.5; margin-left: 4px;"></i></p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="stat-card" onclick="showProcessBpjsDetailModal('bpjs_tk_co')" title="Click to view calculation details BPJS TK (Company)" style="border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px 20px; background: #ffffff; cursor: pointer; transition: all 0.25s ease;" onmouseover="this.style.transform='translateY(-3px)'; this.style.boxShadow='0 8px 20px rgba(99, 102, 241, 0.15)';" onmouseout="this.style.transform='none'; this.style.boxShadow='none';">
+                                    <div style="display: flex; align-items: center; gap: 14px;">
+                                        <div class="stat-icon" style="background: rgba(99, 102, 241, 0.1); color: #4f46e5; width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0;">
+                                            <i class="fas fa-shield-alt"></i>
+                                        </div>
+                                        <div>
+                                            <h4 id="kpiProcessBpjsTkCo" style="font-size: 15px; font-weight: 800; color: #1e293b; margin: 0;">Rp 0</h4>
+                                            <p style="font-size: 11px; color: #64748b; margin: 2px 0 0 0; font-weight: 600; display: flex; align-items: center;">BPJS TK (Company) <i class="fas fa-external-link-alt" style="font-size: 9px; opacity: 0.5; margin-left: 4px;"></i></p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="stat-card" onclick="showProcessBpjsDetailModal('bpjs_kes_emp')" title="Click to view calculation details BPJS Kes (Employee)" style="border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px 20px; background: #ffffff; cursor: pointer; transition: all 0.25s ease;" onmouseover="this.style.transform='translateY(-3px)'; this.style.boxShadow='0 8px 20px rgba(16, 185, 129, 0.15)';" onmouseout="this.style.transform='none'; this.style.boxShadow='none';">
+                                    <div style="display: flex; align-items: center; gap: 14px;">
+                                        <div class="stat-icon" style="background: rgba(16, 185, 129, 0.1); color: #10b981; width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0;">
+                                            <i class="fas fa-user-shield"></i>
+                                        </div>
+                                        <div>
+                                            <h4 id="kpiProcessBpjsKesEmp" style="font-size: 15px; font-weight: 800; color: #1e293b; margin: 0;">Rp 0</h4>
+                                            <p style="font-size: 11px; color: #64748b; margin: 2px 0 0 0; font-weight: 600; display: flex; align-items: center;">BPJS Kes (Employee) <i class="fas fa-external-link-alt" style="font-size: 9px; opacity: 0.5; margin-left: 4px;"></i></p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="stat-card" onclick="showProcessBpjsDetailModal('bpjs_tk_emp')" title="Click to view calculation details BPJS TK (Employee)" style="border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px 20px; background: #ffffff; cursor: pointer; transition: all 0.25s ease;" onmouseover="this.style.transform='translateY(-3px)'; this.style.boxShadow='0 8px 20px rgba(245, 158, 11, 0.15)';" onmouseout="this.style.transform='none'; this.style.boxShadow='none';">
+                                    <div style="display: flex; align-items: center; gap: 14px;">
+                                        <div class="stat-icon" style="background: rgba(245, 158, 11, 0.1); color: #d97706; width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0;">
+                                            <i class="fas fa-id-card"></i>
+                                        </div>
+                                        <div>
+                                            <h4 id="kpiProcessBpjsTkEmp" style="font-size: 15px; font-weight: 800; color: #1e293b; margin: 0;">Rp 0</h4>
+                                            <p style="font-size: 11px; color: #64748b; margin: 2px 0 0 0; font-weight: 600; display: flex; align-items: center;">BPJS TK (Employee) <i class="fas fa-external-link-alt" style="font-size: 9px; opacity: 0.5; margin-left: 4px;"></i></p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="stat-card" onclick="showProcessBpjsDetailModal('deduction_absen')" title="Click to view calculation details Absence Deduction" style="border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px 20px; background: #ffffff; cursor: pointer; transition: all 0.25s ease;" onmouseover="this.style.transform='translateY(-3px)'; this.style.boxShadow='0 8px 20px rgba(239, 68, 68, 0.15)';" onmouseout="this.style.transform='none'; this.style.boxShadow='none';">
+                                    <div style="display: flex; align-items: center; gap: 14px;">
+                                        <div class="stat-icon" style="background: rgba(239, 68, 68, 0.1); color: #dc2626; width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0;">
+                                            <i class="fas fa-user-clock"></i>
+                                        </div>
+                                        <div>
+                                            <h4 id="kpiProcessDeductionAbsen" style="font-size: 15px; font-weight: 800; color: #1e293b; margin: 0;">Rp 0</h4>
+                                            <p style="font-size: 11px; color: #64748b; margin: 2px 0 0 0; font-weight: 600; display: flex; align-items: center;">Deduction (Absence Deduction) <i class="fas fa-external-link-alt" style="font-size: 9px; opacity: 0.5; margin-left: 4px;"></i></p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Sub Tabs for Process Payroll -->
+                            <div class="sub-tabs-container" style="display: flex; gap: 8px; border-bottom: 2px solid #f1f5f9; margin-bottom: 20px; padding-bottom: 2px;">
+                                <button class="sub-tab-btn active" id="subTabSalaryProcessing" onclick="switchPayrollProcessSubTab('processing')" style="padding: 8px 16px; border: none; background: none; font-weight: 600; font-size: 13px; color: var(--primary-color); cursor: pointer; border-bottom: 2px solid var(--primary-color); margin-bottom: -2px; transition: all 0.2s ease; outline: none;">Monthly Salary Processing</button>
+                                <button class="sub-tab-btn" id="subTabCalculationResults" onclick="switchPayrollProcessSubTab('results')" style="padding: 8px 16px; border: none; background: none; font-weight: 600; font-size: 13px; color: #64748b; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.2s ease; outline: none;">Salary Calculation Results</button>
+                            </div>
+
+                            <!-- Sub Panel 1: Monthly Salary Processing -->
+                            <div id="panelSalaryProcessing" class="client-proses-subpanel">
+                                <div class="section-header" style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px;">
+                                    <h3 style="font-size: 16px; color: var(--secondary-color); margin: 0;">Monthly Salary Processing</h3>
+                                </div>
+
+                                <div class="content-card">
+                                    <div id="prosesEmptyState" style="text-align: center; padding: 60px 20px; color: #a0aec0;">
+                                        <i class="fas fa-calendar-check" style="font-size: 48px; margin-bottom: 15px; opacity: 0.5; color: var(--primary-color);"></i>
+                                        <h4 style="font-weight: 700; color: var(--secondary-color); margin-bottom: 5px;">No Period Selected Yet</h4>
+                                        <p style="font-size: 13px; color: #718096; max-width: 400px; margin: 0 auto;">Please select a period from the dropdown above or open a new period to process payroll.</p>
+                                    </div>
+
+                                    <div id="prosesActions" style="display: none;">
+                                        <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+                                            <div>
+                                                <h4 id="activePeriodName" style="margin:0; color: var(--primary-color);">Select Period</h4>
+                                                <span id="activePeriodStatus" class="status-badge success">Open Period</span>
+                                            </div>
+                                            <div style="display: flex; gap: 8px; align-items: center;">
+                                                <button class="btn-save" onclick="downloadSalaryTemplate()" style="background: #27ae60; border-radius: 8px; padding: 10px 16px; font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 8px; border: none; color: white; cursor: pointer;">
+                                                    <i class="fas fa-file-download"></i> Download Template
+                                                </button>
+                                                <button class="btn-save" onclick="bukaModalUploadManualSalary()" style="background: #2980b9; border-radius: 8px; padding: 10px 16px; font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 8px; border: none; color: white; cursor: pointer;">
+                                                    <i class="fas fa-file-upload"></i> Upload Excel
+                                                </button>
+                                                <button class="btn-save" onclick="generateGaji()" style="background: var(--primary-color); border-radius: 8px; padding: 10px 16px; font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 8px;">
+                                                    <i class="fas fa-sync-alt"></i> Generate Salary
+                                                </button>
+                                                <input type="file" id="salaryExcelFile" accept=".xlsx, .xls" onchange="uploadSalaryExcel(event)" style="display: none;">
+                                            </div>
+                                        </div>
+                                        <div class="table-container">
+                                            <table id="tabelCutOff">
+                                                <thead>
+                                                     <tr>
+                                                          <th>Employee ID</th>
+                                                          <th>Employee Name</th>
+                                                          <th>Working Days</th>
+                                                          <th>Overtime</th>
+                                                          <th>Early Arrival</th>
+                                                          <th>Deductions</th>
+                                                          <th>Bonus</th>
+                                                          <th>Action</th>
+                                                     </tr>
+                                                </thead>
+                                                <tbody id="tabelCutOffBody"></tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Sub Panel 2: Salary Calculation Results -->
+                            <div id="panelCalculationResults" class="client-proses-subpanel" style="display: none;">
+                                <div class="content-card">
+                                    <div id="resultsEmptyState" style="text-align: center; padding: 60px 20px; color: #a0aec0;">
+                                        <i class="fas fa-calculator" style="font-size: 48px; margin-bottom: 15px; opacity: 0.5; color: var(--primary-color);"></i>
+                                        <h4 style="font-weight: 700; color: var(--secondary-color); margin-bottom: 5px;">No Period Selected Yet</h4>
+                                        <p style="font-size: 13px; color: #718096; max-width: 400px; margin: 0 auto;">Please select a period in the Processing tab first to view calculation results.</p>
+                                    </div>
+
+                                    <div id="resultSection" style="display: none;">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 15px;">
+                                            <h4 style="font-size: 14px; margin: 0; color: #000000; font-weight: 700;">SALARY CALCULATION RESULTS</h4>
+                                            <div style="display: flex; gap: 10px;">
+                                                <button class="btn-save" id="btnApproveSelectedGaji" onclick="approveSelectedGaji()" style="background: #3498db; border-radius: 8px; padding: 8px 16px; font-weight: 600; display: flex; align-items: center; gap: 8px; border: none; color: white; cursor: pointer;">
+                                                    <i class="fas fa-check-double"></i> Approve Selected
+                                                </button>
+                                                <button class="btn-save" onclick="exportGajiToExcel()" style="background: #27ae60; border-radius: 8px; padding: 8px 16px; font-weight: 600; display: flex; align-items: center; gap: 8px;">
+                                                    <i class="fas fa-file-excel"></i> Export CSV/Excel
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="table-container">
+                                            <table id="tabelReviewGaji">
+                                                <thead>
+                                                     <tr>
+                                                         <th style="width: 40px; text-align: center; vertical-align: middle;"><input type="checkbox" id="selectAllReviewGaji" style="transform: scale(1.2); cursor: pointer;"></th>
+                                                          <th>Employee ID</th>
+                                                          <th>Employee</th>
+                                                          <th>Client</th>
+                                                         <th>Division</th>
+                                                         <th>Department</th>
+                                                         <th>Position</th>
+                                                          <th>Join Date</th>
+                                                          <th>Work Scheme</th>
+                                                          <th>Working Days</th>
+                                                         <th>Total Days in Period</th>
+                                                         <th>Payable Days</th>
+                                                         <th>Target Hours</th>
+                                                         <th>Actual Worked Hours</th>
+                                                         <th>Scheme</th>
+                                                         <th>PTKP</th>
+                                                         <th>Basic Salary</th>
+                                                         <th>Overtime</th>
+                                                         <th>Early Arrival</th>
+                                                         <th>Rapel</th>
+                                                         <th>Lainnya/Bonus</th>
+                                                         <th>Total Earnings</th>
+                                                         <th>Absence Deduction</th>
+                                                         <th>BPJS Kes</th>
+                                                         <th>BPJS JHT</th>
+                                                         <th>BPJS JP</th>
+                                                         <th>PPh 21</th>
+                                                         <th>Other Deductions</th>
+                                                         <th>Total Deductions</th>
+                                                         <th>Net Salary</th>
+                                                         <th>BPJS Kes (Co)</th>
+                                                         <th>BPJS JHT (Co)</th>
+                                                         <th>BPJS JP (Co)</th>
+                                                         <th>BPJS JKK (Co)</th>
+                                                         <th>BPJS JKM (Co)</th>
+                                                         <th>Total BPJS (Co)</th>
+                                                         <th>Status</th>
+                                                         <th>Action</th>
+                                                     </tr>
+                                                </thead>
+                                                <tbody id="tabelReviewGajiBody"></tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                                                <!-- Panel: Scheme Selection -->
+                                                <div id="viewKompensasi" class="w-tab-panel">
+                            <div class="content-card" style="max-width: 100%; border: 1px solid #e2e8f0; border-radius: 16px; padding: 30px; box-shadow: 0 4px 6px rgba(0,0,0,0.02);">
+
+                                <div style="display: flex; flex-direction: column; gap: 20px;">
+                                    
+                                    <!-- Section: Client Payroll Scheme List -->
+                                    <div style="margin-bottom: 30px;">
+                                        <div class="section-header" style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px;">
+                                            <div>
+                                                <h3 style="font-size: 18px; color: var(--secondary-color); margin: 0; font-weight: 700;">Payroll Scheme List</h3>
+                                                <p style="font-size: 13px; color: #64748b; margin: 5px 0 0 0;">Manage payroll schemes for each division, department, and position</p>
+                                            </div>
+                                            <button class="btn-add" onclick="openModalPilihanScheme()" style="background: #f39c12; color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px; font-size: 14px; box-shadow: 0 2px 8px rgba(243, 156, 18, 0.25); transition: all 0.3s;">
+                                                <i class="fas fa-plus"></i> Add Scheme
+                                            </button>
+                                        </div>
+                                        
+                                        <div style="overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 12px;">
+                                            <table style="width: 100%; border-collapse: collapse; background: white;">
+                                                <thead>
+                                                    <tr style="background: #f8fafc; border-bottom: 2px solid #e2e8f0; color: #475569;">
+                                                        <th style="padding: 14px 16px; text-align: left; font-weight: 700; font-size: 13px;">Division</th>
+                                                        <th style="padding: 14px 16px; text-align: left; font-weight: 700; font-size: 13px;">Department</th>
+                                                        <th style="padding: 14px 16px; text-align: left; font-weight: 700; font-size: 13px;">Position</th>
+                                                        <th style="padding: 14px 16px; text-align: left; font-weight: 700; font-size: 13px;">Payroll Scheme</th>
+                                                        <th style="padding: 14px 16px; text-align: left; font-weight: 700; font-size: 13px;">BPJS Scheme</th>
+                                                        <th style="padding: 14px 16px; text-align: center; font-weight: 700; font-size: 13px; width: 120px;">Actions</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody id="tabelPilihanSchemeKlien">
+                                                    <tr>
+                                                        <td colspan="6" style="text-align: center; padding: 40px; color: #94a3b8;">
+                                                            <i class="fas fa-inbox" style="font-size: 48px; margin-bottom: 15px; display: block;"></i>
+                                                            No payroll schemes registered yet. Click the "Add Scheme" button to configure.
+                                                        </td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Hidden Fields to maintain JS compatibility -->
+                                    <div style="display: none;">
+                                        <select id="pilihanSchemePayrollTipe">
+                                            <option value="Template" selected>Template</option>
+                                        </select>
+                                        <div id="pilihanSchemePayrollRegionContainer">
+                                            <select id="pilihanSchemePayrollRegion"></select>
+                                        </div>
+                                        <div id="pilihanSchemePayrollNominalContainer">
+                                            <input type="number" id="pilihanSchemePayrollNominal">
+                                        </div>
+                                        <div id="pilihanSchemePayrollTemplateContainer"></div>
+                                        <select id="pilihanSchemeKompensasi">
+                                            <option value="">-- Select Allowance Scheme --</option>
+                                        </select>
+                                        <div id="pilihanKompensasiSummary"></div>
+                                        <input type="text" id="pilihanSchemeNamaKlien">
+                                        <select id="pilihanSchemeDivision"></select>
+                                        <select id="pilihanSchemeDepartment"></select>
+                                        <select id="pilihanSchemePosition"></select>
+                                        <select id="pilihanSchemeDayKerja"></select>
+                                        <select id="pilihanSchemePayroll"></select>
+                                        <select id="pilihanSchemeBpjs"></select>
+                                         <select id="pilihanSchemeTax"></select>
+                                        <select id="pilihanSchemeLevel">
+                                            <option value="general" selected>general</option>
+                                        </select>
+                                        <input type="hidden" id="pilihanSchemeDivisionId">
+                                        <input type="hidden" id="pilihanSchemeDeptId">
+                                        <input type="hidden" id="pilihanSchemePositionId">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+
+
+                    </div>
+            </div>

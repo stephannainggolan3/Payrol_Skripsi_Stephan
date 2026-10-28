@@ -1,0 +1,827 @@
+<?php
+
+namespace App\Controllers;
+
+use App\Models\EmployeeModel;
+use App\Models\SystemLogModel;
+use CodeIgniter\RESTful\ResourceController;
+
+class Employee extends ResourceController
+{
+    use \App\Traits\AuthTrait;
+
+    protected $modelName = 'App\Models\EmployeeModel';
+    protected $format    = 'json';
+
+    public function index()
+    {
+        // Automatically sync/update missing minimum_wage_ids for existing employees
+        $db = \Config\Database::connect();
+        $missingEmps = $db->table('employees')
+                          ->where('work_location_id IS NOT NULL')
+                          ->where('minimum_wage_id IS NULL')
+                          ->get()
+                          ->getResult();
+        if (!empty($missingEmps)) {
+            foreach ($missingEmps as $emp) {
+                $wageId = $this->resolveMinimumWageId(
+                    $emp->work_location_id,
+                    $emp->client_id,
+                    $emp->division_id,
+                    $emp->department_id,
+                    $emp->position_id
+                );
+                if ($wageId) {
+                    $db->table('employees')->where('id', $emp->id)->update(['minimum_wage_id' => $wageId]);
+                }
+            }
+        }
+
+        $clientId = $this->request->getGet('client_id');
+        if ($clientId && !$this->checkClientAccess((int)$clientId)) {
+            return $this->failClientForbidden();
+        }
+        $sessRole = $this->getAuthRole();
+        $userId = $this->getAuthUserId();
+
+        $userClientModel = new \App\Models\UserClientModel();
+        $allowedClientIds = ($sessRole === 'admin' || !$sessRole) ? null : $userClientModel->getUserClientIds($userId);
+
+        $today = date('Y-m-d');
+        $builder = $this->model->select('employees.*, users.role as user_role, positions.nama as nama_position, departments.nama as nama_dept, divisions.nama as nama_division, COALESCE(employees.division_id, departments.division_id) as division_id, COALESCE(employees.department_id, positions.department_id) as department_id, clients.nama as nama_klien, COALESCE(NULLIF(CAST(employees.alamat AS VARCHAR(MAX)), \'\'), minimum_wages.nama_daerah) as alamat, minimum_wages.tipe as umr_tipe, minimum_wages.nominal as umr_nominal, work_locations.lokasi_kerja as nama_lokasi, work_locations.provinsi as provinsi, work_locations.kota_kabupaten as kota_kabupaten, (SELECT TOP 1 shift_scheme_id FROM employee_shifts WHERE employee_shifts.employee_id = employees.id AND (employee_shifts.end_date IS NULL OR employee_shifts.end_date >= \'' . $today . '\') ORDER BY employee_shifts.start_date DESC) as shift_scheme_id, (SELECT TOP 1 shift_schemes.name FROM employee_shifts LEFT JOIN shift_schemes ON shift_schemes.id = employee_shifts.shift_scheme_id WHERE employee_shifts.employee_id = employees.id AND (employee_shifts.end_date IS NULL OR employee_shifts.end_date >= \'' . $today . '\') ORDER BY employee_shifts.start_date DESC) as shift_name')
+                    ->join('users', 'users.username = employees.nik', 'left')
+                    ->join('positions', 'positions.id = employees.position_id', 'left')
+                    ->join('departments', 'departments.id = COALESCE(employees.department_id, positions.department_id)', 'left')
+                    ->join('divisions', 'divisions.id = COALESCE(employees.division_id, departments.division_id)', 'left')
+                    ->join('clients', 'clients.id = employees.client_id', 'left')
+                    ->join('minimum_wages', 'minimum_wages.id = employees.minimum_wage_id', 'left')
+                    ->join('work_locations', 'work_locations.id = employees.work_location_id', 'left');
+
+        if ($clientId) {
+            $builder->where('employees.client_id', $clientId);
+        }
+
+        if ($allowedClientIds !== null) {
+            if (!empty($allowedClientIds)) {
+                $builder->whereIn('employees.client_id', $allowedClientIds);
+            } else {
+                $builder->where('employees.client_id', -1);
+            }
+        }
+
+        $data = $builder->findAll();
+        return $this->respond($data);
+    }
+
+    public function create()
+    {
+        $data = $this->request->getJSON(true);
+        if (!empty($data['client_id']) && !$this->checkClientAccess((int)$data['client_id'])) {
+            return $this->failClientForbidden('Akses ditolak. Anda tidak memiliki izin untuk menambahkan karyawan ke klien ini.');
+        }
+        $userRole = $data['user_role'] ?? 'staff';
+        unset($data['user_role']);
+
+        $db = \Config\Database::connect();
+        $requesterUsername = $this->request->getHeaderLine('X-User-Action');
+        $requester = $db->table('users')->where('username', $requesterUsername)->get()->getRow();
+        $isRequesterAdmin = $requester && $requester->role === 'admin';
+
+        $assignedRole = 'staff';
+
+        if (!empty($data['npwp'])) {
+            $digitsOnly = preg_replace('/\D/', '', $data['npwp']);
+            if (strlen($digitsOnly) < 15) {
+                return $this->fail('Format NPWP tidak valid. NPWP minimal harus memiliki 15 digit angka.');
+            }
+        }
+        
+        if (!empty($data['work_location_id'])) {
+            $data['minimum_wage_id'] = $this->resolveMinimumWageId(
+                $data['work_location_id'],
+                $data['client_id'] ?? null,
+                $data['division_id'] ?? null,
+                $data['department_id'] ?? null,
+                $data['position_id'] ?? null
+            );
+        }
+
+        if (isset($data['gaji_pokok']) && isset($data['hari_kerja'])) {
+            $hk = (int)$data['hari_kerja'];
+            $pembagi = ($hk == 5) ? 22 : (($hk == 6) ? 26 : (($hk == 7) ? 30 : 22));
+            $data['denda_absen'] = floatval($data['gaji_pokok']) / $pembagi;
+        }
+        
+        $db = \Config\Database::connect();
+        if (isset($data['umr_tipe']) && $data['umr_tipe'] === 'NOMINAL' && isset($data['custom_nominal']) && floatval($data['custom_nominal']) > 0) {
+            $customNominal = floatval($data['custom_nominal']);
+            $exist = $db->table('minimum_wages')
+                        ->where('tipe', 'NOMINAL')
+                        ->where('nominal', $customNominal)
+                        ->get()
+                        ->getRow();
+            if ($exist) {
+                $data['minimum_wage_id'] = $exist->id;
+            } else {
+                $db->table('minimum_wages')->insert([
+                    'tipe' => 'NOMINAL',
+                    'nama_daerah' => 'Nominal Kesepakatan',
+                    'nominal' => $customNominal,
+                    'tahun' => (int)date('Y'),
+                    'kode_daerah' => 'NOMINAL',
+                    'provinsi' => ''
+                ]);
+                $data['minimum_wage_id'] = $db->insertID();
+            }
+        }
+        
+        unset($data['umr_tipe']);
+        unset($data['custom_nominal']);
+
+        if (!empty($data['start_contract'])) {
+            $data['tgl_masuk'] = $data['start_contract'];
+        }
+
+        // Auto-generate employ_id: {year_kontrak}{urutan_5digit}
+        $contractYear = date('Y');
+        if (!empty($data['start_contract'])) {
+            $contractYear = date('Y', strtotime($data['start_contract']));
+        }
+        $db2 = \Config\Database::connect();
+        $db2->transStart();
+        $seqRow = $db2->table('employee_sequences')->where('year', $contractYear)->get()->getRow();
+        if ($seqRow) {
+            $nextSeq = $seqRow->last_sequence + 1;
+            $db2->table('employee_sequences')->where('year', $contractYear)->update(['last_sequence' => $nextSeq]);
+        } else {
+            $lastEmp = $db2->table('employees')
+                           ->select('employ_id')
+                           ->where("employ_id LIKE '" . $contractYear . "%'")
+                           ->orderBy('employ_id', 'DESC')
+                           ->limit(1)
+                           ->get()
+                           ->getRow();
+            $nextSeq = 1;
+            if ($lastEmp && $lastEmp->employ_id) {
+                $nextSeq = ((int) substr($lastEmp->employ_id, 4)) + 1;
+            }
+            $db2->table('employee_sequences')->insert(['year' => $contractYear, 'last_sequence' => $nextSeq]);
+        }
+        $db2->transComplete();
+        $data['employ_id'] = $contractYear . str_pad($nextSeq, 5, '0', STR_PAD_LEFT);
+        $data['nik'] = $data['employ_id'];
+
+        if ($id = $this->model->insert($data)) {
+            $data['id'] = $id;
+
+            // Otomatis buat akun user dengan role yang ditentukan
+            $dbUser = \Config\Database::connect();
+            $username = $data['employ_id'] ?? $data['nik'];
+            $email = !empty($data['email']) ? $data['email'] : ($username . '@bipayroll.internal');
+            $fullName = $data['nama'] ?? '';
+            
+            $userExists = $dbUser->table('users')->where('username', $username)->countAllResults();
+            if ($userExists === 0) {
+                $existingUserByEmail = $dbUser->table('users')->where('email', $email)->get()->getRow();
+                if ($existingUserByEmail) {
+                    $dbUser->table('users')
+                           ->where('id', $existingUserByEmail->id)
+                           ->update([
+                               'username'  => $username,
+                               'role'      => $assignedRole,
+                               'full_name' => $fullName,
+                           ]);
+                } else {
+                    $dbUser->table('users')->insert([
+                        'username'   => $username,
+                        'email'      => $email,
+                        'password'   => password_hash($username, PASSWORD_BCRYPT), // Password default NIK yang di-hash
+                        'role'       => $assignedRole,
+                        'full_name'  => $fullName,
+                        'is_active'  => 1,
+                        'created_at' => date('Y-m-d H:i:s'),
+                        'updated_at' => date('Y-m-d H:i:s')
+                    ]);
+                }
+            }
+
+            // Sync user_clients junction table
+            $createdUser = $dbUser->table('users')->where('username', $username)->get()->getRow();
+            if ($createdUser) {
+                $userClientModel = new \App\Models\UserClientModel();
+                $cIdsToAssign = !empty($data['allowed_client_ids']) && is_array($data['allowed_client_ids']) 
+                    ? $data['allowed_client_ids'] 
+                    : (!empty($data['client_id']) ? [(int)$data['client_id']] : []);
+                if (!empty($cIdsToAssign)) {
+                    $userClientModel->syncUserClients($createdUser->id, $cIdsToAssign);
+                }
+            }
+
+            // Assign shift scheme if provided
+            if (!empty($data['shift_scheme_id'])) {
+                $dbShift = \Config\Database::connect();
+                $dbShift->table('employee_shifts')->insert([
+                    'employee_id' => $id,
+                    'shift_scheme_id' => intval($data['shift_scheme_id']),
+                    'start_date' => $data['start_contract'] ?? date('Y-m-d'),
+                    'end_date' => null,
+                    'created_at' => date('Y-m-d H:i:s'),
+                    'updated_at' => date('Y-m-d H:i:s')
+                ]);
+            }
+
+            // Generate PKWT
+            $contractModel = new \App\Models\ContractModel();
+            $tglMulai = $data['tgl_masuk'] ?? date('Y-m-d');
+            $tglBerakhir = date('Y-m-d', strtotime('+1 year', strtotime($tglMulai)));
+            $contractData = [
+                'employee_id' => $id,
+                'client_id'   => $data['client_id'] ?? null,
+                'no_kontrak'  => 'PKWT-' . date('Ym') . '-' . str_pad($id, 4, '0', STR_PAD_LEFT),
+                'tgl_mulai'   => $tglMulai,
+                'tgl_berakhir'=> $tglBerakhir,
+                'gaji_pokok'  => $data['gaji_pokok'] ?? 0,
+                'status_pkwt' => 'Active'
+            ];
+            $contractModel->insert($contractData);
+
+            $desc = 'Menambahkan karyawan baru: Nama: ' . ($data['nama'] ?? 'Unknown');
+            $fields = [];
+            foreach ($data as $key => $val) {
+                if ($key !== 'id' && $key !== 'nama' && !is_array($val) && !is_object($val)) {
+                    $fields[] = "$key: $val";
+                }
+            }
+            if (count($fields) > 0) {
+                $desc .= "\nDetail: " . implode(", ", $fields);
+            }
+
+            $logModel = new SystemLogModel();
+            $logModel->logAction('CREATE_EMPLOYEE', $desc, $data['client_id'] ?? null, $this->getAuthUserId());
+
+            return $this->respondCreated($data);
+        }
+        return $this->fail($this->model->errors());
+    }
+
+    public function show($id = null)
+    {
+        $emp = $this->model->find($id);
+        if (!$emp) {
+            return $this->failNotFound('Karyawan tidak ditemukan');
+        }
+
+        if (!$this->checkClientAccess((int)$emp['client_id'])) {
+            return $this->failClientForbidden('Akses ditolak. Anda tidak memiliki izin untuk melihat data karyawan ini.');
+        }
+
+        return $this->respond($emp);
+    }
+
+    public function update($id = null)
+    {
+        $data = $this->request->getJSON(true);
+        $userRole = $data['user_role'] ?? null;
+        unset($data['user_role']);
+
+        $db = \Config\Database::connect();
+        $requesterUsername = $this->request->getHeaderLine('X-User-Action');
+        $requester = $db->table('users')->where('username', $requesterUsername)->get()->getRow();
+        $isRequesterAdmin = $requester && $requester->role === 'admin';
+
+        if (!empty($data['npwp'])) {
+            $digitsOnly = preg_replace('/\D/', '', $data['npwp']);
+            if (strlen($digitsOnly) < 15) {
+                return $this->fail('Format NPWP tidak valid. NPWP minimal harus memiliki 15 digit angka.');
+            }
+        }
+
+        $oldEmp = $this->model->find($id);
+        if (!$oldEmp) {
+            return $this->failNotFound('Karyawan tidak ditemukan');
+        }
+        if (!$this->checkClientAccess((int)$oldEmp['client_id'])) {
+            return $this->failClientForbidden('Akses ditolak. Anda tidak memiliki izin untuk mengubah data karyawan ini.');
+        }
+        if (!empty($data['client_id']) && !$this->checkClientAccess((int)$data['client_id'])) {
+            return $this->failClientForbidden('Akses ditolak. Anda tidak memiliki izin untuk memindahkan karyawan ke klien ini.');
+        }
+        
+        if (isset($data['work_location_id'])) {
+            $data['minimum_wage_id'] = $this->resolveMinimumWageId(
+                $data['work_location_id'],
+                $data['client_id'] ?? $oldEmp['client_id'] ?? null,
+                $data['division_id'] ?? $oldEmp['division_id'] ?? null,
+                $data['department_id'] ?? $oldEmp['department_id'] ?? null,
+                $data['position_id'] ?? $oldEmp['position_id'] ?? null
+            );
+        }
+
+        // Auto-calculate denda_absen if gaji_pokok or hari_kerja is updated
+        $gaji = isset($data['gaji_pokok']) ? $data['gaji_pokok'] : ($oldEmp['gaji_pokok'] ?? 0);
+        $hk = isset($data['hari_kerja']) ? (int)$data['hari_kerja'] : (int)($oldEmp['hari_kerja'] ?? 5);
+        if ($gaji > 0 && $hk > 0) {
+            $pembagi = ($hk == 5) ? 22 : (($hk == 6) ? 26 : (($hk == 7) ? 30 : 22));
+            $data['denda_absen'] = floatval($gaji) / $pembagi;
+        }
+        
+        $db = \Config\Database::connect();
+        if (isset($data['umr_tipe']) && $data['umr_tipe'] === 'NOMINAL' && isset($data['custom_nominal']) && floatval($data['custom_nominal']) > 0) {
+            $customNominal = floatval($data['custom_nominal']);
+            $exist = $db->table('minimum_wages')
+                        ->where('tipe', 'NOMINAL')
+                        ->where('nominal', $customNominal)
+                        ->get()
+                        ->getRow();
+            if ($exist) {
+                $data['minimum_wage_id'] = $exist->id;
+            } else {
+                $db->table('minimum_wages')->insert([
+                    'tipe' => 'NOMINAL',
+                    'nama_daerah' => 'Nominal Kesepakatan',
+                    'nominal' => $customNominal,
+                    'tahun' => (int)date('Y'),
+                    'kode_daerah' => 'NOMINAL',
+                    'provinsi' => ''
+                ]);
+                $data['minimum_wage_id'] = $db->insertID();
+            }
+        }
+        
+        unset($data['umr_tipe']);
+        unset($data['custom_nominal']);
+
+        if (!empty($data['start_contract'])) {
+            $data['tgl_masuk'] = $data['start_contract'];
+        }
+
+        // Masukkan primary key ID ke data agar validator CI4 dapat membaca placeholder {id}
+        $data['id'] = $id;
+
+        if ($this->model->update($id, $data)) {
+            
+            // Sync user role if requested by an admin
+            if ($userRole && $isRequesterAdmin && $oldEmp) {
+                $username = $oldEmp['employ_id'] ?? $oldEmp['nik'];
+                $userExists = $db->table('users')->where('username', $username)->countAllResults();
+                if ($userExists > 0) {
+                    $db->table('users')
+                       ->where('username', $username)
+                       ->update(['role' => $userRole]);
+                } else {
+                    $emailToCheck = !empty($data['email']) ? $data['email'] : (!empty($oldEmp['email']) ? $oldEmp['email'] : null);
+                    $existingUserByEmail = null;
+                    if ($emailToCheck) {
+                        $existingUserByEmail = $db->table('users')->where('email', $emailToCheck)->get()->getRow();
+                    }
+
+                    if ($existingUserByEmail) {
+                        $db->table('users')
+                           ->where('id', $existingUserByEmail->id)
+                           ->update([
+                               'username'  => $username,
+                               'role'      => $userRole,
+                               'full_name' => $data['nama'] ?? $oldEmp['nama'] ?? $existingUserByEmail->full_name,
+                           ]);
+                    } else {
+                        $db->table('users')->insert([
+                            'username'   => $username,
+                            'email'      => $emailToCheck ?? ($username . '@bipayroll.internal'),
+                            'password'   => password_hash($username, PASSWORD_BCRYPT),
+                            'role'       => $userRole,
+                            'full_name'  => $data['nama'] ?? $oldEmp['nama'] ?? '',
+                            'is_active'  => 1,
+                            'created_at' => date('Y-m-d H:i:s'),
+                            'updated_at' => date('Y-m-d H:i:s')
+                        ]);
+                    }
+                }
+            }
+
+            // Sync user_clients junction table
+            if ($oldEmp) {
+                $targetUserObj = $db->table('users')->where('username', $oldEmp['employ_id'] ?? $oldEmp['nik'])->get()->getRow();
+                if ($targetUserObj) {
+                    $userClientModel = new \App\Models\UserClientModel();
+                    $cIdsToAssign = !empty($data['allowed_client_ids']) && is_array($data['allowed_client_ids']) 
+                        ? $data['allowed_client_ids'] 
+                        : (!empty($data['client_id']) ? [(int)$data['client_id']] : (!empty($oldEmp['client_id']) ? [(int)$oldEmp['client_id']] : []));
+                    if (!empty($cIdsToAssign)) {
+                        $userClientModel->syncUserClients($targetUserObj->id, $cIdsToAssign);
+                    }
+                }
+            }
+
+            // Sync PKWT employee_name if updated
+            if (isset($data['nama']) && $oldEmp && $data['nama'] !== $oldEmp['nama']) {
+                $db = \Config\Database::connect();
+                $db->table('pkwt')
+                   ->where('client_id', $oldEmp['client_id'])
+                   ->where('employee_name', $oldEmp['nama'])
+                   ->update(['employee_name' => $data['nama']]);
+            }
+
+            // Sync Contract / PKWT Base Salary if updated
+            if (isset($data['gaji_pokok'])) {
+                $contractModel = new \App\Models\ContractModel();
+                $contract = $contractModel->where('employee_id', $id)->where('status_pkwt', 'Active')->first();
+                if ($contract) {
+                    $contractModel->update($contract['id'], ['gaji_pokok' => $data['gaji_pokok']]);
+                }
+            }
+
+            // Sync Contract dates if start_contract or end_contract is updated
+            if (isset($data['start_contract']) || isset($data['end_contract'])) {
+                $contractModel = new \App\Models\ContractModel();
+                $contract = $contractModel->where('employee_id', $id)->where('status_pkwt', 'Active')->first();
+                if ($contract) {
+                    $updateContractData = [];
+                    if (isset($data['start_contract'])) {
+                        $updateContractData['tgl_mulai'] = $data['start_contract'];
+                    }
+                    if (isset($data['end_contract'])) {
+                        $updateContractData['tgl_berakhir'] = $data['end_contract'];
+                    }
+                    if (!empty($updateContractData)) {
+                        $contractModel->update($contract['id'], $updateContractData);
+                    }
+                }
+            }
+
+            // Sync PKWT dates if start_contract or end_contract is updated
+            if (isset($data['start_contract']) || isset($data['end_contract'])) {
+                $dbPkwt = \Config\Database::connect();
+                $updatePkwtData = [];
+                if (isset($data['start_contract'])) {
+                    $updatePkwtData['start_date'] = $data['start_contract'];
+                }
+                if (isset($data['end_contract'])) {
+                    $updatePkwtData['end_date'] = $data['end_contract'];
+                }
+                if (!empty($updatePkwtData)) {
+                    $dbPkwt->table('pkwt')
+                           ->where('client_id', $oldEmp['client_id'] ?? ($data['client_id'] ?? null))
+                           ->where('employee_name', $data['nama'] ?? ($oldEmp['nama'] ?? null))
+                           ->update($updatePkwtData);
+                }
+            }
+
+            // Sync & Recalculate Contract Compensation if contract dates or salary are updated
+            if (isset($data['start_contract']) || isset($data['end_contract']) || isset($data['gaji_pokok']) || (isset($data['tipe_perjanjian']) && $data['tipe_perjanjian'] !== $oldEmp['tipe_perjanjian'])) {
+                $compModel = new \App\Models\ContractCompensationModel();
+                $existingComp = $compModel->where('employee_id', $id)->first();
+                if ($existingComp) {
+                    $cId = $oldEmp['client_id'] ?? ($data['client_id'] ?? null);
+                    
+                    // If contract type changed to non-PKWT, delete the draft/compensation
+                    if (isset($data['tipe_perjanjian']) && $data['tipe_perjanjian'] !== 'PKWT') {
+                        $compModel->delete($existingComp['id']);
+                        
+                        $log = new \App\Models\SystemLogModel();
+                        $log->insert([
+                            'action' => 'DELETE_COMPENSATION',
+                            'description' => "Menghapus draf kompensasi kontrak untuk {$oldEmp['nama']} karena tipe perjanjian diubah menjadi {$data['tipe_perjanjian']}",
+                            'client_id' => $cId,
+                            'created_by' => 1,
+                            'user_name' => $this->request->getHeaderLine('X-User-Action') ?: 'Sistem',
+                            'created_at' => date('Y-m-d H:i:s')
+                        ]);
+                    } else {
+                        // Recalculate compensation
+                        $newBasic = isset($data['gaji_pokok']) ? floatval($data['gaji_pokok']) : floatval($oldEmp['gaji_pokok'] ?? 0);
+                        $newStart = isset($data['start_contract']) ? $data['start_contract'] : ($oldEmp['start_contract'] ?? $oldEmp['tgl_masuk'] ?? null);
+                        $newEnd = isset($data['end_contract']) ? $data['end_contract'] : ($oldEmp['end_contract'] ?? null);
+                        
+                        if ($newStart && $newEnd && $newBasic > 0) {
+                            // Resolve standard days
+                            $db = \Config\Database::connect();
+                            $empConfig = null;
+                            $posId = $data['position_id'] ?? $oldEmp['position_id'] ?? null;
+                            $deptId = $data['department_id'] ?? $oldEmp['department_id'] ?? null;
+                            
+                            if (!empty($posId)) {
+                                $empConfig = $db->table('client_payroll_configs')->where('client_id', $cId)->where('position_id', $posId)->get()->getRow();
+                            }
+                            if (!$empConfig && !empty($deptId)) {
+                                $empConfig = $db->table('client_payroll_configs')->where('client_id', $cId)->where('department_id', $deptId)->where('position_id IS NULL')->get()->getRow();
+                            }
+                            if (!$empConfig) {
+                                $empConfig = $db->table('client_payroll_configs')->where('client_id', $cId)->where('division_id IS NULL')->where('department_id IS NULL')->where('position_id IS NULL')->get()->getRow();
+                            }
+                            
+                            $standardDays = ($empConfig && isset($empConfig->standard_work_days) && intval($empConfig->standard_work_days) > 0) ? intval($empConfig->standard_work_days) : 22;
+                            if (isset($oldEmp['custom_standard_days']) && intval($oldEmp['custom_standard_days']) > 0) {
+                                $standardDays = intval($oldEmp['custom_standard_days']);
+                            }
+                            if (isset($data['custom_standard_days']) && intval($data['custom_standard_days']) > 0) {
+                                $standardDays = intval($data['custom_standard_days']);
+                            }
+                            
+                            // Recalculate
+                            $calc = $compModel->calculateCompensation($newBasic, $newStart, $newEnd, $standardDays);
+                            
+                            $compModel->update($existingComp['id'], [
+                                'basic_salary' => $newBasic,
+                                'tgl_mulai_kerja' => $newStart,
+                                'tgl_akhir_kontrak' => $newEnd,
+                                'masa_kerja_year' => $calc['year'],
+                                'masa_kerja_month' => $calc['month'],
+                                'masa_kerja_hari' => $calc['hari'],
+                                'multiplier' => $calc['multiplier'],
+                                'value_kompensasi' => $calc['value'],
+                                'value_kompensasi_final' => null, // Reset final value
+                                'status' => 'Draft', // Reset status to Draft so it has to be re-evaluated
+                                'ditetapkan_oleh' => null,
+                                'ditetapkan_pada' => null,
+                                'disetujui_oleh' => null,
+                                'disetujui_pada' => null,
+                                'notes' => 'Dihitung ulang otomatis karena pembaruan data kontrak karyawan.'
+                            ]);
+                            
+                            $log = new \App\Models\SystemLogModel();
+                            $log->insert([
+                                'action' => 'RECALCULATE_COMPENSATION',
+                                'description' => "Menghitung ulang otomatis draf kompensasi kontrak untuk {$oldEmp['nama']} karena pembaruan data kontrak.",
+                                'client_id' => $cId,
+                                'created_by' => 1,
+                                'user_name' => $this->request->getHeaderLine('X-User-Action') ?: 'Sistem',
+                                'created_at' => date('Y-m-d H:i:s')
+                            ]);
+                        }
+                    }
+                }
+            }
+
+            // Sync employee shifts if updated
+            if (isset($data['shift_scheme_id'])) {
+                $dbShift = \Config\Database::connect();
+                $newShiftId = !empty($data['shift_scheme_id']) ? intval($data['shift_scheme_id']) : null;
+                $today = date('Y-m-d');
+
+                // Get current active shift
+                $currentActive = $dbShift->table('employee_shifts')
+                    ->where('employee_id', $id)
+                    ->where("(end_date IS NULL OR end_date >= '{$today}')")
+                    ->get()->getRow();
+
+                if ($newShiftId) {
+                    if ($currentActive) {
+                        if ($currentActive->shift_scheme_id != $newShiftId) {
+                            $yesterday = date('Y-m-d', strtotime(' -1 day'));
+                            if ($currentActive->start_date < $today) {
+                                $dbShift->table('employee_shifts')
+                                    ->where('id', $currentActive->id)
+                                    ->update([
+                                        'end_date' => $yesterday,
+                                        'updated_at' => date('Y-m-d H:i:s')
+                                    ]);
+                            } else {
+                                $dbShift->table('employee_shifts')
+                                    ->where('id', $currentActive->id)
+                                    ->delete();
+                            }
+
+                            $dbShift->table('employee_shifts')->insert([
+                                'employee_id' => $id,
+                                'shift_scheme_id' => $newShiftId,
+                                'start_date' => $today,
+                                'end_date' => null,
+                                'created_at' => date('Y-m-d H:i:s'),
+                                'updated_at' => date('Y-m-d H:i:s')
+                            ]);
+                        }
+                    } else {
+                        $dbShift->table('employee_shifts')->insert([
+                            'employee_id' => $id,
+                            'shift_scheme_id' => $newShiftId,
+                            'start_date' => $today,
+                            'end_date' => null,
+                            'created_at' => date('Y-m-d H:i:s'),
+                            'updated_at' => date('Y-m-d H:i:s')
+                        ]);
+                    }
+                } else {
+                    if ($currentActive) {
+                        $yesterday = date('Y-m-d', strtotime(' -1 day'));
+                        if ($currentActive->start_date < $today) {
+                            $dbShift->table('employee_shifts')
+                                ->where('id', $currentActive->id)
+                                ->update([
+                                    'end_date' => $yesterday,
+                                    'updated_at' => date('Y-m-d H:i:s')
+                                ]);
+                        } else {
+                            $dbShift->table('employee_shifts')
+                                ->where('id', $currentActive->id)
+                                ->delete();
+                        }
+                    }
+                }
+            }
+            
+            $emp = $this->model->find($id);
+            
+            $changes = [];
+            if ($oldEmp) {
+                foreach ($data as $key => $val) {
+                    if (array_key_exists($key, $oldEmp) && $oldEmp[$key] != $val && !is_array($val) && !is_object($val)) {
+                        $changes[] = "- $key diubah dari '{$oldEmp[$key]}' menjadi '$val'";
+                    }
+                }
+            }
+            $desc = 'Memperbarui data karyawan bernama ' . ($emp['nama'] ?? 'ID '.$id) . " (ID: $id)";
+            if (count($changes) > 0) {
+                $desc .= ".\nPerubahan:\n" . implode("\n", $changes);
+            } else {
+                $desc .= " (Tidak ada perubahan kolom)";
+            }
+            
+            $logModel = new SystemLogModel();
+            $logModel->logAction('UPDATE_EMPLOYEE', $desc, $emp['client_id'] ?? null, $this->getAuthUserId());
+
+            return $this->respond($data);
+        }
+        return $this->fail($this->model->errors());
+    }
+
+    public function delete($id = null)
+    {
+        $emp = $this->model->find($id);
+        if (!$emp) {
+            return $this->failNotFound('Karyawan tidak ditemukan');
+        }
+        if (!$this->checkClientAccess((int)$emp['client_id'])) {
+            return $this->failClientForbidden('Akses ditolak. Anda tidak memiliki izin untuk menghapus data karyawan ini.');
+        }
+        if ($this->model->delete($id)) {
+            // Delete corresponding PKWT records and associated tables
+            $db = \Config\Database::connect();
+            $pkwt = $db->table('pkwt')
+                       ->where('client_id', $emp['client_id'])
+                       ->where('employee_name', $emp['nama'])
+                       ->get()
+                       ->getRow();
+            if ($pkwt) {
+                $db->table('pkwt_components')->where('pkwt_id', $pkwt->id)->delete();
+                $db->table('payroll_attendance')->where('pkwt_id', $pkwt->id)->delete();
+                $db->table('payroll_final')->where('pkwt_id', $pkwt->id)->delete();
+                $db->table('pkwt')->where('id', $pkwt->id)->delete();
+            }
+
+            $desc = 'Menghapus data karyawan: Nama: ' . ($emp['nama'] ?? 'ID '.$id);
+            $fields = [];
+            foreach ($emp as $key => $val) {
+                if ($key !== 'id' && $key !== 'nama' && !is_array($val) && !is_object($val)) {
+                    $fields[] = "$key: $val";
+                }
+            }
+            if (count($fields) > 0) {
+                $desc .= "\nData terakhir: " . implode(", ", $fields);
+            }
+            
+            $logModel = new SystemLogModel();
+            $logModel->logAction('DELETE_EMPLOYEE', $desc, $emp['client_id'] ?? null, $this->getAuthUserId());
+            return $this->respondDeleted(['id' => $id]);
+        }
+        return $this->failNotFound();
+    }
+
+    public function nextEmployId()
+    {
+        $year = $this->request->getGet('year') ?? date('Y');
+        $db = \Config\Database::connect();
+        $seqRow = $db->table('employee_sequences')->where('year', $year)->get()->getRow();
+        if ($seqRow) {
+            $nextSeq = $seqRow->last_sequence + 1;
+        } else {
+            $lastEmp = $db->table('employees')
+                          ->select('employ_id')
+                          ->where("employ_id LIKE '" . $year . "%'")
+                          ->orderBy('employ_id', 'DESC')
+                          ->limit(1)
+                          ->get()
+                          ->getRow();
+            $nextSeq = 1;
+            if ($lastEmp && $lastEmp->employ_id) {
+                $nextSeq = ((int) substr($lastEmp->employ_id, 4)) + 1;
+            }
+        }
+        $employId = $year . str_pad($nextSeq, 5, '0', STR_PAD_LEFT);
+        return $this->respond(['employ_id' => $employId]);
+    }
+
+    private function resolveClientConfig($clientId, $divisionId = null, $departmentId = null, $positionId = null)
+    {
+        $db = \Config\Database::connect();
+        $config = null;
+        
+        if ($positionId) {
+            $config = $db->table('client_payroll_configs')
+                ->where('client_id', $clientId)
+                ->where('position_id', $positionId)
+                ->get()->getRow();
+        }
+        if (!$config && $departmentId) {
+            $config = $db->table('client_payroll_configs')
+                ->where('client_id', $clientId)
+                ->where('department_id', $departmentId)
+                ->where('position_id IS NULL')
+                ->get()->getRow();
+        }
+        if (!$config && $divisionId) {
+            $config = $db->table('client_payroll_configs')
+                ->where('client_id', $clientId)
+                ->where('division_id', $divisionId)
+                ->where('department_id IS NULL')
+                ->where('position_id IS NULL')
+                ->get()->getRow();
+        }
+        if (!$config) {
+            $config = $db->table('client_payroll_configs')
+                ->where('client_id', $clientId)
+                ->where('division_id IS NULL')
+                ->where('department_id IS NULL')
+                ->where('position_id IS NULL')
+                ->get()->getRow();
+        }
+        return $config;
+    }
+
+    private function resolveMinimumWageId($workLocationId, $clientId = null, $divisionId = null, $departmentId = null, $positionId = null)
+    {
+        if (!$workLocationId) return null;
+        $db = \Config\Database::connect();
+        
+        // 1. Get work location
+        $loc = $db->table('work_locations')->where('id', $workLocationId)->get()->getRow();
+        if (!$loc) return null;
+        
+        // 2. Resolve payroll type from config
+        $payrollType = 'UMP/UMK'; // Default fallback
+        if ($clientId) {
+            $config = $this->resolveClientConfig($clientId, $divisionId, $departmentId, $positionId);
+            if ($config && !empty($config->payroll_type)) {
+                $payrollType = $config->payroll_type;
+                if ($payrollType === 'Template' && !empty($config->payroll_scheme_id)) {
+                    $basicComp = $db->table('payroll_components')
+                        ->where('scheme_id', $config->payroll_scheme_id)
+                        ->groupStart()
+                            ->where('jenis_component', 'basic_salary')
+                            ->orLike('nama', 'Base Salary')
+                        ->groupEnd()
+                        ->get()
+                        ->getRow();
+                    if ($basicComp && !empty($basicComp->sumber_value)) {
+                        if ($basicComp->sumber_value === 'ump') {
+                            $payrollType = 'UMP';
+                        } else if ($basicComp->sumber_value === 'umk') {
+                            $payrollType = 'UMK';
+                        } else if ($basicComp->sumber_value === 'ump_umk') {
+                            $payrollType = 'UMP/UMK';
+                        }
+                    }
+                }
+            }
+        }
+        
+        $mw = null;
+        $searchCity = !empty($loc->kota_kabupaten) ? trim(strtolower($loc->kota_kabupaten)) : null;
+        $searchProv = !empty($loc->provinsi) ? trim(strtolower($loc->provinsi)) : null;
+
+        if ($payrollType === 'UMK') {
+            if ($searchCity) {
+                $mw = $db->table('minimum_wages')->where(['tipe' => 'UMK', 'nama_daerah' => $loc->kota_kabupaten])->orderBy('tahun', 'DESC')->get()->getRow();
+                if (!$mw) {
+                    $mw = $db->table('minimum_wages')->where('tipe', 'UMK')->where('LOWER(nama_daerah)', $searchCity)->orderBy('tahun', 'DESC')->get()->getRow();
+                }
+            }
+        } else if ($payrollType === 'UMP') {
+            if ($searchProv) {
+                $mw = $db->table('minimum_wages')->where(['tipe' => 'UMP', 'nama_daerah' => $loc->provinsi])->orderBy('tahun', 'DESC')->get()->getRow();
+                if (!$mw) {
+                    $mw = $db->table('minimum_wages')->where('tipe', 'UMP')->where('LOWER(nama_daerah)', $searchProv)->orderBy('tahun', 'DESC')->get()->getRow();
+                }
+            }
+        } else { // UMP/UMK
+            if ($searchCity) {
+                $mw = $db->table('minimum_wages')->where(['tipe' => 'UMK', 'nama_daerah' => $loc->kota_kabupaten])->orderBy('tahun', 'DESC')->get()->getRow();
+                if (!$mw) {
+                    $mw = $db->table('minimum_wages')->where('tipe', 'UMK')->where('LOWER(nama_daerah)', $searchCity)->orderBy('tahun', 'DESC')->get()->getRow();
+                }
+            }
+            if (!$mw && $searchProv) {
+                $mw = $db->table('minimum_wages')->where(['tipe' => 'UMP', 'nama_daerah' => $loc->provinsi])->orderBy('tahun', 'DESC')->get()->getRow();
+                if (!$mw) {
+                    $mw = $db->table('minimum_wages')->where('tipe', 'UMP')->where('LOWER(nama_daerah)', $searchProv)->orderBy('tahun', 'DESC')->get()->getRow();
+                }
+            }
+        }
+
+        if ($mw) {
+            return $mw->id;
+        }
+        return null;
+    }
+
+
+}

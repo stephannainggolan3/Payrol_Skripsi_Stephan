@@ -1,0 +1,253 @@
+// ===== EMPLOYEE MODULE =====
+// Extracted from app.js for modular monolith architecture
+
+function rowHtmlForEmployee(emp) {
+    return `
+        <tr>
+            <td style="font-weight: 600;">${emp.nama_klien || '-'}</td>
+            <td style="font-weight: 600;">${emp.nik || '-'}</td>
+            <td style="font-weight: 600;">
+                <i class="fas fa-user" style="margin-right: 8px; opacity: 0.6;"></i>${emp.nama}
+                ${emp.email ? `<div style="font-size: 11px; color: #64748b; font-weight: normal; margin-top: 4px;"><i class="fas fa-envelope" style="margin-right: 4px; opacity: 0.6;"></i>${emp.email}</div>` : ''}
+                ${emp.user_role ? `
+                    <div style="margin-top: 4px;">
+                        <span style="font-size: 10px; font-weight: 700; color: ${(typeof ROLE_COLORS !== 'undefined' ? ROLE_COLORS[emp.user_role] : '') || '#6b7280'}; background: ${((typeof ROLE_COLORS !== 'undefined' ? ROLE_COLORS[emp.user_role] : '') || '#6b7280')}18; border: 1px solid ${((typeof ROLE_COLORS !== 'undefined' ? ROLE_COLORS[emp.user_role] : '') || '#6b7280')}33; padding: 2px 6px; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px; text-transform: uppercase;">
+                            <i class="fas fa-user-tag" style="font-size: 9px;"></i>${(typeof ROLE_LABELS !== 'undefined' ? ROLE_LABELS[emp.user_role] : '') || emp.user_role}
+                        </span>
+                    </div>
+                ` : ''}
+            </td>
+            <td>
+                <div style="font-size: 13px;">${emp.tempat_lahir || '-'}</div>
+                <div style="font-size: 11px;">${emp.tanggal_lahir || '-'}</div>
+            </td>
+            <td>${emp.npwp || '-'}</td>
+            <td>${emp.ptkp || 'TK/0'}</td>
+            <td>${emp.nama_division || '-'}</td>
+            <td>${emp.nama_dept || '-'}</td>
+            <td>${emp.nama_position || '-'}</td>
+            <td>
+                <div style="font-weight:600;">
+                    <i class="fas fa-map-marker-alt" style="margin-right: 4px; opacity: 0.7;"></i>${emp.nama_lokasi || '-'}
+                </div>
+            </td>
+            <td>${emp.kota_kabupaten || '-'}</td>
+            <td>${emp.provinsi || '-'}</td>
+            <td>
+                <div style="font-weight: 600; color: #f39c12; background: rgba(243, 156, 18, 0.1); padding: 4px 8px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; gap: 4px;">
+                    <i class="fas fa-clock" style="opacity: 0.8;"></i> ${emp.shift_name || 'No Shift'}
+                </div>
+            </td>
+            <td>
+                <div style="font-weight: 600; color: #16a34a;">
+                    Rp ${emp.umr_nominal ? parseFloat(emp.umr_nominal).toLocaleString('id-ID') : '0'}
+                </div>
+                <div style="font-size: 11px; color: #64748b;">
+                    ${emp.umr_tipe || '-'}
+                </div>
+            </td>
+            <td>
+                <div style="font-weight: 600;">${emp.tipe_perjanjian || '-'}</div>
+                <div style="font-size: 11px;">${emp.start_contract || '-'} to ${emp.end_contract || '-'}</div>
+            </td>
+
+            <td>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn-icon btn-edit" onclick="bukaModalKaryawanGlobalEdit(${emp.id}, ${emp.client_id})" title="Edit Employee" style="color: var(--primary-color); background: rgba(41, 128, 185, 0.1); width: 30px; height: 30px; border-radius: 6px;"><i class="fas fa-user-edit"></i></button>
+                    <button class="btn-icon btn-delete" onclick="hapusKaryawanGlobal(${emp.id})" title="Delete Employee" style="color: var(--danger); background: rgba(231, 76, 60, 0.1); width: 30px; height: 30px; border-radius: 6px;"><i class="fas fa-trash"></i></button>
+                </div>
+            </td>
+        </tr>
+    `;
+}
+
+async function renderAllEmployees() {
+    try {
+        const tbody = document.getElementById('tabelKaryawanBody');
+        if (tbody) {
+            tbody.innerHTML = `<tr><td colspan="16" style="text-align: center; padding: 20px; color: #94a3b8;"><i class="fas fa-spinner fa-spin" style="margin-right: 8px;"></i>Loading data...</td></tr>`;
+        }
+        const url = window.selectedClientId ? `${API_URL}/employees?client_id=${window.selectedClientId}` : `${API_URL}/employees`;
+        const res = await fetch(url);
+        const employees = await res.json();
+        window.employees = employees; // Expose globally for app-org.js
+        if (!tbody) return;
+        tbody.innerHTML = employees.map(emp => rowHtmlForEmployee(emp)).join('');
+    } catch (err) { console.error(err); }
+}
+
+function filterKaryawan() {
+    const q = document.getElementById('searchKaryawan').value.toLowerCase();
+    const tbody = document.getElementById('tabelKaryawanBody');
+    if (!tbody || !window.employees) return;
+
+    const filtered = window.employees.filter(emp => {
+        return (emp.nama && emp.nama.toLowerCase().includes(q)) ||
+            (emp.nik && emp.nik.toLowerCase().includes(q)) ||
+            (emp.nama_position && emp.nama_position.toLowerCase().includes(q)) ||
+            (emp.nama_dept && emp.nama_dept.toLowerCase().includes(q)) ||
+            (emp.nama_division && emp.nama_division.toLowerCase().includes(q)) ||
+            (emp.email && emp.email.toLowerCase().includes(q)) ||
+            (emp.nama_lokasi && emp.nama_lokasi.toLowerCase().includes(q));
+    });
+
+    tbody.innerHTML = filtered.map(emp => rowHtmlForEmployee(emp)).join('');
+}
+window.filterKaryawan = filterKaryawan;
+
+// ===== 3. GLOBAL MANAJEMEN KARYAWAN =====
+let allEmployeesGlobal = [];
+
+async function renderManagementKaryawan(list = null) {
+    try {
+        if (!list) {
+            const tbody = document.getElementById('tabelKaryawanGlobalBody');
+            if (tbody) {
+                tbody.innerHTML = `<tr><td colspan="16" style="text-align: center; padding: 20px; color: #94a3b8;"><i class="fas fa-spinner fa-spin" style="margin-right: 8px;"></i>Loading data...</td></tr>`;
+            }
+            const res = await fetch(`${API_URL}/employees`);
+            allEmployeesGlobal = await res.json();
+            window.allEmployeesGlobal = allEmployeesGlobal;
+            list = allEmployeesGlobal;
+        }
+        const tbody = document.getElementById('tabelKaryawanGlobalBody');
+        if (!tbody) return;
+
+        if (!Array.isArray(list) || list.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="16" style="text-align: center; padding: 20px; color: #94a3b8;">${!Array.isArray(list) ? 'Gagal memuat data karyawan.' : 'Tidak ada data karyawan.'}</td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = list.map(emp => rowHtmlForEmployee(emp)).join('');
+    } catch (err) {
+        console.error('Error rendering karyawan:', err);
+        const tbody = document.getElementById('tabelKaryawanGlobalBody');
+        if (tbody) {
+            tbody.innerHTML = `<tr><td colspan="16" style="text-align: center; padding: 20px; color: #ef4444;"><i class="fas fa-exclamation-circle" style="margin-right: 8px;"></i>Terjadi kesalahan saat memuat data karyawan.</td></tr>`;
+        }
+    }
+}
+
+function cariKaryawanGlobalActive() {
+    const q = document.getElementById('cariKaryawanGlobal').value.toLowerCase();
+    if (!q) {
+        renderManagementKaryawan(allEmployeesGlobal);
+        return;
+    }
+    const filtered = allEmployeesGlobal.filter(emp => {
+        return (emp.nama && emp.nama.toLowerCase().includes(q)) ||
+            (emp.nik && emp.nik.toLowerCase().includes(q)) ||
+            (emp.nama_klien && emp.nama_klien.toLowerCase().includes(q)) ||
+            (emp.nama_position && emp.nama_position.toLowerCase().includes(q)) ||
+            (emp.nama_dept && emp.nama_dept.toLowerCase().includes(q)) ||
+            (emp.nama_division && emp.nama_division.toLowerCase().includes(q)) ||
+            (emp.nama_lokasi && emp.nama_lokasi.toLowerCase().includes(q));
+    });
+    renderManagementKaryawan(filtered);
+}
+
+function bukaModalKaryawanGlobal() {
+    window.selectedClientId = null;
+    if (typeof window.updateAiAssistantContext === 'function') {
+        window.updateAiAssistantContext();
+    }
+    if (typeof bukaModalKaryawan === 'function') {
+        bukaModalKaryawan('tambah');
+    }
+}
+
+async function bukaModalKaryawanGlobalEdit(id, clientId) {
+    window.selectedClientId = clientId;
+    if (typeof window.updateAiAssistantContext === 'function') {
+        window.updateAiAssistantContext();
+    }
+    if (typeof bukaModalKaryawan === 'function') {
+        await bukaModalKaryawan('edit', id);
+    }
+}
+
+async function hapusKaryawanGlobal(id) {
+    if (!await showConfirm('Are you sure you want to delete this employee?')) return;
+    try {
+        const res = await fetch(`${API_URL}/employees/${id}`, { method: 'DELETE' });
+        if (res.ok) {
+            renderManagementKaryawan();
+            if (typeof renderAllEmployees === 'function') {
+                renderAllEmployees();
+            }
+            showToast('Employee deleted successfully', 'success');
+        }
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+window.renderManagementKaryawan = renderManagementKaryawan;
+window.renderAllEmployees = renderAllEmployees;
+window.filterKaryawan = filterKaryawan;
+window.cariKaryawanGlobalActive = cariKaryawanGlobalActive;
+window.bukaModalKaryawanGlobal = bukaModalKaryawanGlobal;
+window.bukaModalKaryawanGlobalEdit = bukaModalKaryawanGlobalEdit;
+window.hapusKaryawanGlobal = hapusKaryawanGlobal;
+
+function toggleSubmenu(event, id) {
+    if (event) event.stopPropagation();
+    const submenu = document.getElementById(id);
+    if (!submenu) return;
+
+    const isVisible = submenu.style.display === 'block';
+
+    // Hide all other submenus first (if there are any)
+    document.querySelectorAll('.sidebar-submenu').forEach(sub => {
+        if (sub.id !== id) {
+            sub.style.display = 'none';
+            const arr = sub.parentElement.querySelector('.submenu-arrow');
+            if (arr) arr.style.transform = 'rotate(0deg)';
+        }
+    });
+
+    submenu.style.display = isVisible ? 'none' : 'block';
+
+    const arrow = event.currentTarget.querySelector('.submenu-arrow');
+    if (arrow) {
+        arrow.style.transform = isVisible ? 'rotate(0deg)' : 'rotate(180deg)';
+    }
+}
+
+function switchKaryawanSubMenu(action, event) {
+    if (event) event.stopPropagation();
+
+    document.querySelectorAll('.sidebar-submenu li').forEach(l => l.classList.remove('active'));
+
+    if (action === 'lokasi_kerja') {
+        switchView('globalLokasiKerja');
+        if (typeof loadGlobalWorkLocations === 'function') {
+            loadGlobalWorkLocations();
+        }
+        const subItem = document.getElementById('submenuLokasiKerja');
+        if (subItem) subItem.classList.add('active');
+    } else if (action === 'tambah_karyawan') {
+        switchView('managementKaryawan');
+        const subItem = document.getElementById('submenuTambahKaryawan');
+        if (subItem) subItem.classList.add('active');
+    } else if (action === 'scheme_shift') {
+        switchView('schemeShift');
+        if (typeof loadShiftSchemes === 'function') {
+            loadShiftSchemes();
+        }
+        const subItem = document.getElementById('submenuSchemeShift');
+        if (subItem) subItem.classList.add('active');
+    } else if (action === 'fpk_master') {
+        switchView('fpkMaster');
+        if (typeof initFpkView === 'function') {
+            initFpkView();
+        }
+        const subItem = document.getElementById('submenuFpkMaster');
+        if (subItem) subItem.classList.add('active');
+    }
+}
+
+window.toggleSubmenu = toggleSubmenu;
+window.switchKaryawanSubMenu = switchKaryawanSubMenu;
+window.togglePayrollSubmenu = togglePayrollSubmenu;
+window.switchPayrollSub = switchPayrollSub;

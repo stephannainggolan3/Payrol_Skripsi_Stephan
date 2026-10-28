@@ -1,0 +1,1064 @@
+<?php
+
+namespace App\Controllers;
+
+class Migrasi extends BaseController
+{
+    public function index()
+    {
+        $db = \Config\Database::connect();
+        
+        // 1. Tabel Scheme Tax (PPh 21)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'tax_schemes')
+            CREATE TABLE tax_schemes (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                nama NVARCHAR(100) NOT NULL,
+                metode NVARCHAR(50) DEFAULT 'Gross',
+                ptkp_status NVARCHAR(10) DEFAULT 'TK/0',
+                deskripsi NVARCHAR(MAX),
+                bpjs_kes_karyawan DECIMAL(5,2) DEFAULT 1.0,
+                bpjs_kes_company DECIMAL(5,2) DEFAULT 4.0,
+                bpjs_kes_max_salary DECIMAL(15,2) DEFAULT 12000000.0,
+                bpjs_jht_karyawan DECIMAL(5,2) DEFAULT 2.0,
+                bpjs_jht_company DECIMAL(5,2) DEFAULT 3.7,
+                bpjs_jp_karyawan DECIMAL(5,2) DEFAULT 1.0,
+                bpjs_jp_company DECIMAL(5,2) DEFAULT 2.0,
+                bpjs_jp_max_salary DECIMAL(15,2) DEFAULT 10024600.0,
+                bpjs_jkk_company DECIMAL(5,2) DEFAULT 0.24,
+                bpjs_jkm_company DECIMAL(5,2) DEFAULT 0.30,
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // Ensure BPJS columns exist in tax_schemes for older dbs
+        $bpjsCols = [
+            'bpjs_kes_karyawan' => 'DECIMAL(5,2) DEFAULT 1.0',
+            'bpjs_kes_company' => 'DECIMAL(5,2) DEFAULT 4.0',
+            'bpjs_kes_max_salary' => 'DECIMAL(15,2) DEFAULT 12000000.0',
+            'bpjs_jht_karyawan' => 'DECIMAL(5,2) DEFAULT 2.0',
+            'bpjs_jht_company' => 'DECIMAL(5,2) DEFAULT 3.7',
+            'bpjs_jp_karyawan' => 'DECIMAL(5,2) DEFAULT 1.0',
+            'bpjs_jp_company' => 'DECIMAL(5,2) DEFAULT 2.0',
+            'bpjs_jp_max_salary' => 'DECIMAL(15,2) DEFAULT 10024600.0',
+            'bpjs_jkk_company' => 'DECIMAL(5,2) DEFAULT 0.24',
+            'bpjs_jkm_company' => 'DECIMAL(5,2) DEFAULT 0.30'
+        ];
+        foreach ($bpjsCols as $col => $definition) {
+            $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('tax_schemes') AND name = '$col')
+                ALTER TABLE tax_schemes ADD $col $definition");
+        }
+
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('tax_schemes') AND name = 'tipe')
+            ALTER TABLE tax_schemes ADD tipe NVARCHAR(20) DEFAULT 'pph21'");
+        $db->query("UPDATE tax_schemes SET tipe = 'pph21' WHERE tipe IS NULL");
+
+
+        // 2. Tabel Mapping (Menempelkan Scheme ke Klien)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'client_payroll_configs')
+            CREATE TABLE client_payroll_configs (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                client_id INT,
+                payroll_scheme_id INT,
+                tax_scheme_id INT,
+                compensation_scheme_id INT,
+                pay_date INT DEFAULT 25,
+                cutoff_start INT DEFAULT 21,
+                cutoff_end INT DEFAULT 20,
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+            
+        // Ensure compensation_scheme_id column exists for older dbs
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('client_payroll_configs') AND name = 'compensation_scheme_id')
+            ALTER TABLE client_payroll_configs ADD compensation_scheme_id INT");
+
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('client_payroll_configs') AND name = 'bpjs_scheme_id')
+            ALTER TABLE client_payroll_configs ADD bpjs_scheme_id INT NULL");
+
+        // Ensure payroll_type, minimum_wage_id, and custom_nominal columns exist for wage integration
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('client_payroll_configs') AND name = 'payroll_type')
+            ALTER TABLE client_payroll_configs ADD payroll_type NVARCHAR(20) NULL");
+
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('client_payroll_configs') AND name = 'minimum_wage_id')
+            ALTER TABLE client_payroll_configs ADD minimum_wage_id INT NULL");
+
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('client_payroll_configs') AND name = 'custom_nominal')
+            ALTER TABLE client_payroll_configs ADD custom_nominal DECIMAL(15,2) NULL");
+
+        // Multi Cut-off columns
+        $newCutoffCols = [
+            'cutoff_gaji_pokok_start'        => 'INT DEFAULT 21',
+            'cutoff_gaji_pokok_end'          => 'INT DEFAULT 20',
+            'cutoff_gaji_pokok_val'          => 'NVARCHAR(255) NULL',
+            'cutoff_gaji_pokok_schedule_ref' => 'INT NULL',
+            'cutoff_overtime_start'            => 'INT DEFAULT 21',
+            'cutoff_overtime_end'              => 'INT DEFAULT 20',
+            'cutoff_overtime_val'              => 'NVARCHAR(255) NULL',
+            'cutoff_overtime_schedule_ref'     => 'INT NULL',
+            'cutoff_insentif_start'          => 'INT DEFAULT 21',
+            'cutoff_insentif_end'            => 'INT DEFAULT 20',
+            'cutoff_insentif_val'            => 'NVARCHAR(255) NULL',
+            'cutoff_insentif_schedule_ref'   => 'INT NULL',
+            'is_rapel_gaji_pokok'            => 'TINYINT DEFAULT 1',
+            'is_rapel_overtime'                => 'TINYINT DEFAULT 1',
+            'is_rapel_insentif'              => 'TINYINT DEFAULT 1'
+        ];
+        foreach ($newCutoffCols as $col => $definition) {
+            $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('client_payroll_configs') AND name = '$col')
+                ALTER TABLE client_payroll_configs ADD $col $definition");
+        }
+
+        // Client specific payroll parameters
+        $clientParamCols = [
+            'overtime_divisor'             => 'INT DEFAULT 173 NULL',
+            'standard_work_days'           => 'INT DEFAULT 22 NULL',
+            'standard_work_hours'          => 'INT DEFAULT 8 NULL',
+            'max_overtime_regular'         => 'INT DEFAULT 3 NULL',
+            'overtime_multiplier_workday'  => 'DECIMAL(5,2) DEFAULT 1.50 NULL',
+            'overtime_multiplier_holiday'  => 'DECIMAL(5,2) DEFAULT 2.00 NULL',
+            'minimum_overtime_minutes'     => 'INT DEFAULT 30 NULL',
+            'early_arrival_enabled'        => 'TINYINT DEFAULT 1 NULL',
+            'max_early_arrival_minutes'    => 'INT DEFAULT 180 NULL'
+        ];
+        foreach ($clientParamCols as $col => $definition) {
+            $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('client_payroll_configs') AND name = '$col')
+                ALTER TABLE client_payroll_configs ADD $col $definition");
+        }
+
+        // Add max_early_arrival_minutes to payroll_schemes if not exists
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_schemes') AND name = 'max_early_arrival_minutes')
+            ALTER TABLE payroll_schemes ADD max_early_arrival_minutes INT DEFAULT 180 NULL");
+
+        // Populate defaults from existing cutoff_start / cutoff_end
+        $db->query("UPDATE client_payroll_configs SET 
+            cutoff_gaji_pokok_start = COALESCE(cutoff_gaji_pokok_start, cutoff_start, 21),
+            cutoff_gaji_pokok_end = COALESCE(cutoff_gaji_pokok_end, cutoff_end, 20),
+            cutoff_overtime_start = COALESCE(cutoff_overtime_start, cutoff_start, 21),
+            cutoff_overtime_end = COALESCE(cutoff_overtime_end, cutoff_end, 20),
+            cutoff_insentif_start = COALESCE(cutoff_insentif_start, cutoff_start, 21),
+            cutoff_insentif_end = COALESCE(cutoff_insentif_end, cutoff_end, 20)
+            WHERE cutoff_gaji_pokok_start IS NULL");
+
+        // 3. Tabel PKWT (Kontrak Kerja)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'pkwt')
+            CREATE TABLE pkwt (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                client_id INT,
+                employee_name NVARCHAR(255) NOT NULL,
+                position_name NVARCHAR(255),
+                start_date DATE,
+                end_date DATE,
+                status NVARCHAR(20) DEFAULT 'Active',
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // Ensure tipe_perjanjian column exists in pkwt table for contract types (PKWT, PKWTT, PKHL)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('pkwt') AND name = 'tipe_perjanjian')
+            ALTER TABLE pkwt ADD tipe_perjanjian NVARCHAR(50) NULL");
+
+        // 4. Tabel Salary Details PKWT
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'pkwt_components')
+            CREATE TABLE pkwt_components (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                pkwt_id INT,
+                nama NVARCHAR(100),
+                tipe NVARCHAR(20),
+                value DECIMAL(15,2),
+                is_persentase BIT DEFAULT 0,
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('pkwt_components') AND name = 'jenis_component')
+            ALTER TABLE pkwt_components ADD jenis_component NVARCHAR(50) DEFAULT 'kompensasi'");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('pkwt_components') AND name = 'sifat_kompensasi')
+            ALTER TABLE pkwt_components ADD sifat_kompensasi NVARCHAR(20) DEFAULT 'tetap'");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('pkwt_components') AND name = 'sumber_value')
+            ALTER TABLE pkwt_components ADD sumber_value NVARCHAR(50) DEFAULT 'nominal'");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('pkwt_components') AND name = 'period')
+            ALTER TABLE pkwt_components ADD period NVARCHAR(20) DEFAULT 'month'");
+
+        // 5. Tabel Period Gaji
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'payroll_periods')
+            CREATE TABLE payroll_periods (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                nama NVARCHAR(50) NOT NULL,
+                month INT,
+                year INT,
+                status NVARCHAR(20) DEFAULT 'Open',
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // 6. Tabel Data Cut-Off (Absensi & Overtime)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'payroll_attendance')
+            CREATE TABLE payroll_attendance (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                period_id INT,
+                pkwt_id INT,
+                hari_kerja INT DEFAULT 0,
+                jam_overtime DECIMAL(10,2) DEFAULT 0,
+                deduction_absensi DECIMAL(15,2) DEFAULT 0,
+                bonus_tambahan DECIMAL(15,2) DEFAULT 0,
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // 7. Tabel Hasil Gaji Akhir
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'payroll_final')
+            CREATE TABLE payroll_final (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                period_id INT,
+                pkwt_id INT,
+                total_revenue DECIMAL(15,2),
+                total_deduction DECIMAL(15,2),
+                take_home_pay DECIMAL(15,2),
+                status_approval NVARCHAR(20) DEFAULT 'Pending',
+                approved_by NVARCHAR(100),
+                bpjs_kes_karyawan DECIMAL(15,2) DEFAULT 0,
+                bpjs_kes_company DECIMAL(15,2) DEFAULT 0,
+                bpjs_jht_karyawan DECIMAL(15,2) DEFAULT 0,
+                bpjs_jht_company DECIMAL(15,2) DEFAULT 0,
+                bpjs_jp_karyawan DECIMAL(15,2) DEFAULT 0,
+                bpjs_jp_company DECIMAL(15,2) DEFAULT 0,
+                bpjs_jkk_company DECIMAL(15,2) DEFAULT 0,
+                bpjs_jkm_company DECIMAL(15,2) DEFAULT 0,
+                pph21 DECIMAL(15,2) DEFAULT 0,
+                tax_allowance DECIMAL(15,2) DEFAULT 0,
+                tax_method NVARCHAR(20) DEFAULT 'Gross',
+                ptkp_status NVARCHAR(10) DEFAULT 'TK/0',
+                gaji_pokok DECIMAL(15,2) DEFAULT 0,
+                deduction_absen DECIMAL(15,2) DEFAULT 0,
+                jam_overtime DECIMAL(10,2) DEFAULT 0,
+                overtime_pay DECIMAL(15,2) DEFAULT 0,
+                bonus_tambahan DECIMAL(15,2) DEFAULT 0,
+                raw_components NVARCHAR(MAX),
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // Ensure new calculation columns exist in payroll_final for older dbs
+        $finalCols = [
+            'bpjs_kes_karyawan' => 'DECIMAL(15,2) DEFAULT 0',
+            'bpjs_kes_company' => 'DECIMAL(15,2) DEFAULT 0',
+            'bpjs_jht_karyawan' => 'DECIMAL(15,2) DEFAULT 0',
+            'bpjs_jht_company' => 'DECIMAL(15,2) DEFAULT 0',
+            'bpjs_jp_karyawan' => 'DECIMAL(15,2) DEFAULT 0',
+            'bpjs_jp_company' => 'DECIMAL(15,2) DEFAULT 0',
+            'bpjs_jkk_company' => 'DECIMAL(15,2) DEFAULT 0',
+            'bpjs_jkm_company' => 'DECIMAL(15,2) DEFAULT 0',
+            'pph21' => 'DECIMAL(15,2) DEFAULT 0',
+            'tax_allowance' => 'DECIMAL(15,2) DEFAULT 0',
+            'tax_method' => "NVARCHAR(20) DEFAULT 'Gross'",
+            'ptkp_status' => "NVARCHAR(10) DEFAULT 'TK/0'",
+            'gaji_pokok' => 'DECIMAL(15,2) DEFAULT 0',
+            'deduction_absen' => 'DECIMAL(15,2) DEFAULT 0',
+            'jam_overtime' => 'DECIMAL(10,2) DEFAULT 0',
+            'overtime_pay' => 'DECIMAL(15,2) DEFAULT 0',
+            'bonus_tambahan' => 'DECIMAL(15,2) DEFAULT 0',
+            'raw_components' => 'NVARCHAR(MAX)',
+            'early_arrival_minutes' => 'INT DEFAULT 0',
+            'early_arrival_pay' => 'DECIMAL(15,2) DEFAULT 0'
+        ];
+        foreach ($finalCols as $col => $definition) {
+            $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_final') AND name = '$col')
+                ALTER TABLE payroll_final ADD $col $definition");
+        }
+
+        // Ensure new calculation columns exist in payrolls for older dbs
+        $payrollCols = [
+            'bpjs_kes_karyawan' => 'DECIMAL(15,2) DEFAULT 0',
+            'bpjs_kes_company' => 'DECIMAL(15,2) DEFAULT 0',
+            'bpjs_jht_karyawan' => 'DECIMAL(15,2) DEFAULT 0',
+            'bpjs_jht_company' => 'DECIMAL(15,2) DEFAULT 0',
+            'bpjs_jp_karyawan' => 'DECIMAL(15,2) DEFAULT 0',
+            'bpjs_jp_company' => 'DECIMAL(15,2) DEFAULT 0',
+            'bpjs_jkk_company' => 'DECIMAL(15,2) DEFAULT 0',
+            'bpjs_jkm_company' => 'DECIMAL(15,2) DEFAULT 0',
+            'pph21' => 'DECIMAL(15,2) DEFAULT 0',
+            'tax_allowance' => 'DECIMAL(15,2) DEFAULT 0',
+            'tax_method' => "NVARCHAR(20) DEFAULT 'Gross'",
+            'ptkp_status' => "NVARCHAR(10) DEFAULT 'TK/0'",
+            'deduction_absen' => 'DECIMAL(15,2) DEFAULT 0',
+            'overtime_pay' => 'DECIMAL(15,2) DEFAULT 0',
+            'bonus_tambahan' => 'DECIMAL(15,2) DEFAULT 0'
+        ];
+        foreach ($payrollCols as $col => $definition) {
+            $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payrolls') AND name = '$col')
+                ALTER TABLE payrolls ADD $col $definition");
+        }
+
+
+
+        // 8. Tabel UMP/UMK (Minimum Wages)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'minimum_wages')
+            CREATE TABLE minimum_wages (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                tipe NVARCHAR(10),
+                kode_daerah NVARCHAR(20),
+                nama_daerah NVARCHAR(100),
+                provinsi NVARCHAR(100),
+                nominal DECIMAL(15,2),
+                year INT,
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // 9. Tabel Kompensasi Klien (Basic Salary, Meal, dll) (LEGACY)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'client_compensations')
+            CREATE TABLE client_compensations (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                client_id INT,
+                nama NVARCHAR(100) NOT NULL,
+                tipe NVARCHAR(20) DEFAULT 'revenue',
+                nominal DECIMAL(15,2) DEFAULT 0,
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // 9b. Master Compensation Scheme (Global Templates)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'compensation_schemes')
+            CREATE TABLE compensation_schemes (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                nama NVARCHAR(100) NOT NULL,
+                deskripsi NVARCHAR(MAX),
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // 9c. Master Component Kompensasi (Items in Templates)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'compensation_components')
+            CREATE TABLE compensation_components (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                scheme_id INT,
+                nama NVARCHAR(100) NOT NULL,
+                tipe NVARCHAR(20) DEFAULT 'revenue',
+                value DECIMAL(15,2) DEFAULT 0,
+                is_persentase BIT DEFAULT 0,
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('compensation_components') AND name = 'tipe')
+            ALTER TABLE compensation_components ADD tipe NVARCHAR(20) DEFAULT 'revenue'");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('compensation_components') AND name = 'value')
+            ALTER TABLE compensation_components ADD value DECIMAL(15,2) DEFAULT 0");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('compensation_components') AND name = 'is_persentase')
+            ALTER TABLE compensation_components ADD is_persentase BIT DEFAULT 0");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('compensation_components') AND name = 'jenis_component')
+            ALTER TABLE compensation_components ADD jenis_component NVARCHAR(50) DEFAULT 'kompensasi'");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('compensation_components') AND name = 'sumber_value')
+            ALTER TABLE compensation_components ADD sumber_value NVARCHAR(50) DEFAULT 'nominal'");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('compensation_components') AND name = 'period')
+            ALTER TABLE compensation_components ADD period NVARCHAR(20) DEFAULT 'month'");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('compensation_components') AND name = 'sifat_kompensasi')
+            ALTER TABLE compensation_components ADD sifat_kompensasi NVARCHAR(20) DEFAULT 'tetap'");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'client_absence_configs')
+            CREATE TABLE client_absence_configs (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                client_id INT,
+                prorate INT DEFAULT 0,
+                absen_tidak_potong INT DEFAULT 0,
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('client_absence_configs') AND name = 'nominal_deduction')
+            ALTER TABLE client_absence_configs ADD nominal_deduction DECIMAL(15,2) DEFAULT 0");
+
+        // 11. Tambah kolom level pada positions (jika belum ada)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('positions') AND name = 'level')
+            ALTER TABLE positions ADD level NVARCHAR(50) DEFAULT ''");
+
+        // Tambah kolom hari_kerja pada positions (jika belum ada)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('positions') AND name = 'hari_kerja')
+            ALTER TABLE positions ADD hari_kerja INT DEFAULT 5");
+
+        // 12. Tambah kolom alamat pada employees (jika belum ada)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('employees') AND name = 'alamat')
+            ALTER TABLE employees ADD alamat NVARCHAR(MAX) NULL");
+
+        // 13. Tambah tabel status_logs
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'status_logs')
+            CREATE TABLE status_logs (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                description NVARCHAR(MAX),
+                user_action NVARCHAR(100),
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('status_logs') AND name = 'id')
+            ALTER TABLE status_logs ADD id INT IDENTITY(1,1) PRIMARY KEY");
+        
+        // Fix column naming for existing tables
+        $db->query("IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('status_logs') AND name = 'action')
+            EXEC sp_rename 'status_logs.action', 'description', 'COLUMN'");
+        $db->query("IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('system_logs') AND name = 'status_log')
+            EXEC sp_rename 'system_logs.status_log', 'description', 'COLUMN'");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('system_logs') AND name = 'user_name')
+            ALTER TABLE system_logs ADD user_name NVARCHAR(100) NULL");
+
+        // 14. Pastikan kolom-kolom baru ada di payroll_components untuk sinkronisasi UMP/UMK
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_components') AND name = 'scheme_id')
+            ALTER TABLE payroll_components ADD scheme_id INT NULL");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_components') AND name = 'jenis_component')
+            ALTER TABLE payroll_components ADD jenis_component NVARCHAR(50) DEFAULT 'basic_salary'");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_components') AND name = 'sumber_value')
+            ALTER TABLE payroll_components ADD sumber_value NVARCHAR(50) DEFAULT 'nominal'");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_components') AND name = 'period')
+            ALTER TABLE payroll_components ADD period NVARCHAR(20) DEFAULT 'month'");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_components') AND name = 'sifat_kompensasi')
+            ALTER TABLE payroll_components ADD sifat_kompensasi NVARCHAR(20) DEFAULT 'tetap'");
+
+        // 15. Pastikan kolom-kolom baru ada di payroll_schemes untuk kompensasi & absen
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_schemes') AND name = 'compensation_scheme_id')
+            ALTER TABLE payroll_schemes ADD compensation_scheme_id INT NULL");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_schemes') AND name = 'prorate')
+            ALTER TABLE payroll_schemes ADD prorate INT DEFAULT 0");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_schemes') AND name = 'absen_tidak_potong')
+            ALTER TABLE payroll_schemes ADD absen_tidak_potong INT DEFAULT 0");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_schemes') AND name = 'nominal_deduction')
+            ALTER TABLE payroll_schemes ADD nominal_deduction DECIMAL(15,2) DEFAULT 0");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_schemes') AND name = 'grace_period_late')
+            ALTER TABLE payroll_schemes ADD grace_period_late INT DEFAULT 0");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_schemes') AND name = 'grace_period_early')
+            ALTER TABLE payroll_schemes ADD grace_period_early INT DEFAULT 0");
+
+        // 16. Relaksasi kolom legacy payroll_components agar scheme-based insert berfungsi
+        $db->query("ALTER TABLE payroll_components ALTER COLUMN client_id INT NULL");
+        $db->query("ALTER TABLE payroll_components ALTER COLUMN nama_component VARCHAR(100) NULL");
+        $db->query("ALTER TABLE payroll_components ALTER COLUMN tipe VARCHAR(20) NULL");
+        $db->query("ALTER TABLE payroll_components ALTER COLUMN jenis_value VARCHAR(20) NULL");
+
+        // 17. Tambahkan kolom division_id, department_id, dan position_id di client_payroll_configs
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('client_payroll_configs') AND name = 'division_id')
+            ALTER TABLE client_payroll_configs ADD division_id INT NULL");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('client_payroll_configs') AND name = 'department_id')
+            ALTER TABLE client_payroll_configs ADD department_id INT NULL");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('client_payroll_configs') AND name = 'position_id')
+            ALTER TABLE client_payroll_configs ADD position_id INT NULL");
+        // 18. Tabel Global STO (Organization Structure Global)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'global_divisions')
+            CREATE TABLE global_divisions (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                nama NVARCHAR(255) NOT NULL,
+                created_at DATETIME NULL,
+                updated_at DATETIME NULL
+            )");
+
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'global_departments')
+            CREATE TABLE global_departments (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                nama NVARCHAR(255) NOT NULL,
+                created_at DATETIME NULL,
+                updated_at DATETIME NULL
+            )");
+
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'global_positions')
+            CREATE TABLE global_positions (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                nama NVARCHAR(255) NOT NULL,
+                created_at DATETIME NULL,
+                updated_at DATETIME NULL
+            )");
+
+        // 19. Tambahkan kolom flag BPJS & PPh21 untuk 6 allowance di payroll_scheme_templates
+        $allowanceFlags = [
+            'bpjs_inc_transport' => 'TINYINT DEFAULT 0',
+            'pph_inc_transport' => 'TINYINT DEFAULT 1',
+            'bpjs_inc_makan' => 'TINYINT DEFAULT 0',
+            'pph_inc_makan' => 'TINYINT DEFAULT 1',
+            'bpjs_inc_komunikasi' => 'TINYINT DEFAULT 1',
+            'pph_inc_komunikasi' => 'TINYINT DEFAULT 1',
+            'bpjs_inc_position' => 'TINYINT DEFAULT 1',
+            'pph_inc_position' => 'TINYINT DEFAULT 1',
+            'bpjs_inc_kehadiran' => 'TINYINT DEFAULT 0',
+            'pph_inc_kehadiran' => 'TINYINT DEFAULT 1',
+            'bpjs_inc_kinerja' => 'TINYINT DEFAULT 0',
+            'pph_inc_kinerja' => 'TINYINT DEFAULT 1',
+        ];
+        foreach ($allowanceFlags as $col => $def) {
+            $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_scheme_templates') AND name = '$col')
+                ALTER TABLE payroll_scheme_templates ADD $col $def");
+        }
+
+        // 20. Tambahkan kolom is_bpjs dan is_pph21 ke tabel compensation_components, pkwt_components, dan payroll_components
+        $compFlags = [
+            'is_bpjs' => 'TINYINT DEFAULT 0',
+            'is_pph21' => 'TINYINT DEFAULT 1',
+        ];
+        foreach ($compFlags as $col => $def) {
+            $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('compensation_components') AND name = '$col')
+                ALTER TABLE compensation_components ADD $col $def");
+            $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('pkwt_components') AND name = '$col')
+                ALTER TABLE pkwt_components ADD $col $def");
+            $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_components') AND name = '$col')
+                ALTER TABLE payroll_components ADD $col $def");
+        }
+
+        // 21. Tabel Master Schedule (Master Payroll Schedule Templates)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'payroll_schedules')
+            CREATE TABLE payroll_schedules (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                nama NVARCHAR(100) NOT NULL,
+                pay_date INT DEFAULT 25,
+                cutoff_start INT DEFAULT 21,
+                cutoff_end INT DEFAULT 20,
+                deskripsi NVARCHAR(MAX) NULL,
+                year INT DEFAULT 2026,
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_schedules') AND name = 'year')
+            ALTER TABLE payroll_schedules ADD year INT DEFAULT 2026");
+
+        // Seed default schedules if empty
+        $scheduleCountObj = $db->query("SELECT COUNT(*) as [count] FROM payroll_schedules")->getRow();
+        $scheduleCount = $scheduleCountObj ? intval($scheduleCountObj->count) : 0;
+        if ($scheduleCount == 0) {
+            $db->query("INSERT INTO payroll_schedules (nama, pay_date, cutoff_start, cutoff_end, deskripsi, year) 
+                VALUES ('Standard Schedule (25th)', 25, 21, 20, 'Standard payroll cycle with payday on the 25th, cutoff period from the 21st of the previous month to the 20th of the current month.', 2026)");
+            $db->query("INSERT INTO payroll_schedules (nama, pay_date, cutoff_start, cutoff_end, deskripsi, year) 
+                VALUES ('End of Month Schedule', 30, 26, 25, 'Payroll cycle with payday on the 30th/End of month, cutoff period from the 26th of the previous month to the 25th of the current month.', 2026)");
+        }
+
+        // 22. Tabel Attendance Logs (Log Kehadiran Dayan)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'attendance_logs')
+            CREATE TABLE attendance_logs (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                employee_id INT NOT NULL,
+                log_date DATE NOT NULL DEFAULT GETDATE(),
+                status NVARCHAR(20) DEFAULT 'Hadir',
+                check_in NVARCHAR(10) NULL,
+                check_out NVARCHAR(10) NULL,
+                notes NVARCHAR(MAX) NULL,
+                shift_scheme_id INT NULL,
+                is_rapel BIT DEFAULT 0,
+                payout_period NVARCHAR(20) NULL,
+                calculated_work_hours DECIMAL(4,1) DEFAULT 0.0,
+                calculated_overtime_hours DECIMAL(4,1) DEFAULT 0.0,
+                is_incomplete BIT DEFAULT 0,
+                late_hours DECIMAL(4,1) DEFAULT 0.0,
+                early_leave_hours DECIMAL(4,1) DEFAULT 0.0,
+                late_minutes INT DEFAULT 0,
+                late_penalty_hours INT DEFAULT 0,
+                denda_terlambat DECIMAL(15,2) DEFAULT 0.0,
+                early_leave_minutes INT DEFAULT 0,
+                is_early_leave_alfa BIT DEFAULT 0,
+                denda_alfa DECIMAL(15,2) DEFAULT 0.0,
+                absent_penalty DECIMAL(15,2) DEFAULT 0.0,
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // Rename legacy columns if present from older migrations
+        $db->query("IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('attendance_logs') AND name = 'tanggal')
+            EXEC sp_rename 'attendance_logs.tanggal', 'log_date', 'COLUMN'");
+        $db->query("IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('attendance_logs') AND name = 'jam_masuk')
+            EXEC sp_rename 'attendance_logs.jam_masuk', 'check_in', 'COLUMN'");
+        $db->query("IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('attendance_logs') AND name = 'jam_keluar')
+            EXEC sp_rename 'attendance_logs.jam_keluar', 'check_out', 'COLUMN'");
+        $db->query("IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('attendance_logs') AND name = 'description')
+            EXEC sp_rename 'attendance_logs.description', 'notes', 'COLUMN'");
+
+        // Ensure all attendance_logs columns exist
+        $attCols = [
+            'log_date'                  => 'DATE NOT NULL DEFAULT GETDATE()',
+            'status'                    => "NVARCHAR(20) DEFAULT 'Hadir'",
+            'check_in'                  => 'NVARCHAR(10) NULL',
+            'check_out'                 => 'NVARCHAR(10) NULL',
+            'notes'                     => 'NVARCHAR(MAX) NULL',
+            'shift_scheme_id'           => 'INT NULL',
+            'is_rapel'                  => 'BIT DEFAULT 0',
+            'payout_period'             => 'NVARCHAR(20) NULL',
+            'calculated_work_hours'     => 'DECIMAL(4,1) DEFAULT 0.0',
+            'calculated_overtime_hours' => 'DECIMAL(4,1) DEFAULT 0.0',
+            'is_incomplete'             => 'BIT DEFAULT 0',
+            'late_hours'                => 'DECIMAL(4,1) DEFAULT 0.0',
+            'early_leave_hours'         => 'DECIMAL(4,1) DEFAULT 0.0',
+            'late_minutes'              => 'INT DEFAULT 0',
+            'late_penalty_hours'        => 'INT DEFAULT 0',
+            'denda_terlambat'           => 'DECIMAL(15,2) DEFAULT 0.0',
+            'early_leave_minutes'       => 'INT DEFAULT 0',
+            'is_early_leave_alfa'       => 'BIT DEFAULT 0',
+            'denda_alfa'                => 'DECIMAL(15,2) DEFAULT 0.0',
+            'absent_penalty'            => 'DECIMAL(15,2) DEFAULT 0.0',
+        ];
+        foreach ($attCols as $col => $definition) {
+            $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('attendance_logs') AND name = '$col')
+                ALTER TABLE attendance_logs ADD $col $definition");
+        }
+
+        // 23. Tabel Overtime Logs (Log Overtime Dayan)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'overtime_logs')
+            CREATE TABLE overtime_logs (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                employee_id INT NOT NULL,
+                tanggal DATE NOT NULL,
+                jam_overtime DECIMAL(4,1) NOT NULL,
+                is_holiday BIT DEFAULT 0,
+                description NVARCHAR(MAX) NULL,
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('overtime_logs') AND name = 'status')
+            ALTER TABLE overtime_logs ADD status NVARCHAR(20) DEFAULT 'Pending'");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('overtime_logs') AND name = 'approved_by')
+            ALTER TABLE overtime_logs ADD approved_by NVARCHAR(100) NULL");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('overtime_logs') AND name = 'approved_at')
+            ALTER TABLE overtime_logs ADD approved_at DATETIME NULL");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('overtime_logs') AND name = 'is_rapel')
+            ALTER TABLE overtime_logs ADD is_rapel BIT DEFAULT 0");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('overtime_logs') AND name = 'payout_period')
+            ALTER TABLE overtime_logs ADD payout_period NVARCHAR(20) NULL");
+
+        // 24. Tabel Holiday Calendar (Master Holiday Nasional)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'holiday_calendar')
+            CREATE TABLE holiday_calendar (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                tanggal DATE NOT NULL,
+                deskripsi NVARCHAR(255) NOT NULL,
+                year INT,
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // 25. Tambah kolom type dan payout_period pada pkwt_components (untuk Routine/Ad-hoc)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('pkwt_components') AND name = 'allowance_type')
+            ALTER TABLE pkwt_components ADD allowance_type NVARCHAR(20) DEFAULT 'Routine'");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('pkwt_components') AND name = 'payout_period')
+            ALTER TABLE pkwt_components ADD payout_period NVARCHAR(20) NULL");
+
+        // 26. Tambah kolom custom_standard_days & profile fields di employees
+        $empCols = [
+            'alamat'               => 'NVARCHAR(MAX) NULL',
+            'tempat_lahir'         => 'VARCHAR(100) NULL',
+            'tanggal_lahir'        => 'DATE NULL',
+            'npwp'                 => 'VARCHAR(50) NULL',
+            'bank_name'            => 'VARCHAR(100) NULL',
+            'ptkp'                 => 'VARCHAR(20) NULL',
+            'start_contract'       => 'DATE NULL',
+            'end_contract'         => 'DATE NULL',
+            'tipe_perjanjian'      => 'VARCHAR(50) NULL',
+            'status_pernikahan'    => 'VARCHAR(50) NULL',
+            'work_location_id'     => 'INT NULL',
+            'amount_anak'          => 'INT DEFAULT 0 NULL',
+            'employ_id'            => 'NVARCHAR(50) NULL',
+            'hari_kerja'           => 'INT DEFAULT 5 NULL',
+            'denda_absen'          => 'DECIMAL(15,2) DEFAULT 0 NULL',
+            'division_id'          => 'INT NULL',
+            'department_id'        => 'INT NULL',
+            'custom_standard_days' => 'INT NULL',
+            'minimum_wage_id'      => 'INT NULL',
+            'fpk_id'               => 'INT NULL'
+        ];
+        foreach ($empCols as $col => $definition) {
+            $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('employees') AND name = '$col')
+                ALTER TABLE employees ADD $col $definition");
+        }
+
+        // 27. Tabel System Settings
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'system_settings')
+            CREATE TABLE system_settings (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                setting_key NVARCHAR(100) UNIQUE NOT NULL,
+                setting_value NVARCHAR(255) NOT NULL,
+                created_at DATETIME DEFAULT GETDATE(),
+                updated_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // Ensure updated_at column exists in system_settings table
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('system_settings') AND name = 'updated_at')
+            ALTER TABLE system_settings ADD updated_at DATETIME DEFAULT GETDATE() NULL");
+
+        // Seed default settings if not exists
+        $divisorExists = $db->query("SELECT COUNT(*) as [count] FROM system_settings WHERE setting_key = 'overtime_divisor'")->getRow();
+        if ($divisorExists && intval($divisorExists->count) === 0) {
+            $db->query("INSERT INTO system_settings (setting_key, setting_value) VALUES ('overtime_divisor', '160')");
+        }
+
+        // 28. Tabel Shift Master & Employee Shifts
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'shift_schemes')
+            CREATE TABLE shift_schemes (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                name NVARCHAR(100) NOT NULL,
+                start_time NVARCHAR(10) NOT NULL,
+                end_time NVARCHAR(10) NOT NULL,
+                duration DECIMAL(4,1) NOT NULL,
+                grace_period_late INT DEFAULT 0,
+                grace_period_early INT DEFAULT 0,
+                break_start_time NVARCHAR(10) NULL,
+                break_end_time NVARCHAR(10) NULL,
+                break_duration DECIMAL(4,1) DEFAULT 0.0,
+                created_at DATETIME DEFAULT GETDATE(),
+                updated_at DATETIME DEFAULT GETDATE()
+            )");
+
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'employee_shifts')
+            CREATE TABLE employee_shifts (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                employee_id INT NOT NULL,
+                shift_scheme_id INT NOT NULL,
+                start_date DATE NOT NULL,
+                end_date DATE NULL,
+                created_at DATETIME DEFAULT GETDATE(),
+                updated_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // Seed default shifts if empty
+        $shiftCountObj = $db->query("SELECT COUNT(*) as [count] FROM shift_schemes")->getRow();
+        $shiftCount = $shiftCountObj ? intval($shiftCountObj->count) : 0;
+        if ($shiftCount == 0) {
+            $db->query("INSERT INTO shift_schemes (name, start_time, end_time, duration, break_duration, grace_period_late, grace_period_early) 
+                VALUES ('Pagi', '08:00', '13:00', 5.0, 0.0, 15, 15)");
+            $db->query("INSERT INTO shift_schemes (name, start_time, end_time, duration, break_duration, grace_period_late, grace_period_early) 
+                VALUES ('Siang', '13:00', '18:00', 5.0, 0.0, 15, 15)");
+            $db->query("INSERT INTO shift_schemes (name, start_time, end_time, duration, break_duration, grace_period_late, grace_period_early) 
+                VALUES ('Shift Overtime', '18:00', '22:00', 4.0, 0.0, 0, 0)");
+        }
+
+        // Add break_duration, start, end to existing shift_schemes
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('shift_schemes') AND name = 'break_duration')
+            ALTER TABLE shift_schemes ADD break_duration DECIMAL(4,1) DEFAULT 0.0");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('shift_schemes') AND name = 'break_start_time')
+            ALTER TABLE shift_schemes ADD break_start_time NVARCHAR(10) NULL");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('shift_schemes') AND name = 'break_end_time')
+            ALTER TABLE shift_schemes ADD break_end_time NVARCHAR(10) NULL");
+
+        // Clean up is_holiday_shift and is_overtime_shift from existing DB installations
+        $db->query("
+            DECLARE @sql NVARCHAR(MAX) = '';
+            SELECT @sql += 'ALTER TABLE shift_schemes DROP CONSTRAINT ' + name + ';'
+            FROM sys.default_constraints
+            WHERE parent_object_id = OBJECT_ID('shift_schemes')
+              AND parent_column_id IN (
+                  SELECT column_id 
+                  FROM sys.columns 
+                  WHERE object_id = OBJECT_ID('shift_schemes') 
+                    AND name IN ('is_holiday_shift', 'is_overtime_shift')
+              );
+            IF @sql <> '' EXEC sp_executesql @sql;
+        ");
+        $db->query("
+            IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('shift_schemes') AND name = 'is_holiday_shift')
+                ALTER TABLE shift_schemes DROP COLUMN is_holiday_shift;
+        ");
+        $db->query("
+            IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('shift_schemes') AND name = 'is_overtime_shift')
+                ALTER TABLE shift_schemes DROP COLUMN is_overtime_shift;
+        ");
+
+        // 29. Tambahkan kolom absensi & overtime ke tabel payroll_schemes & payroll_scheme_templates
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_schemes') AND name = 'min_overtime')
+            ALTER TABLE payroll_schemes ADD min_overtime INT DEFAULT 30");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_schemes') AND name = 'denda_terlambat_per_jam')
+            ALTER TABLE payroll_schemes ADD denda_terlambat_per_jam DECIMAL(15,2) DEFAULT 0");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_schemes') AND name = 'denda_alfa_per_hari')
+            ALTER TABLE payroll_schemes ADD denda_alfa_per_hari DECIMAL(15,2) DEFAULT 0");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_schemes') AND name = 'early_leave_threshold')
+            ALTER TABLE payroll_schemes ADD early_leave_threshold INT DEFAULT 0");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_schemes') AND name = 'overtime_type')
+            ALTER TABLE payroll_schemes ADD overtime_type VARCHAR(50) DEFAULT 'depnaker'");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_schemes') AND name = 'lumpsum_subtype')
+            ALTER TABLE payroll_schemes ADD lumpsum_subtype VARCHAR(50) DEFAULT 'flat'");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_schemes') AND name = 'lumpsum_nominal')
+            ALTER TABLE payroll_schemes ADD lumpsum_nominal DECIMAL(15,2) DEFAULT 0");
+
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_scheme_templates') AND name = 'grace_period_late')
+            ALTER TABLE payroll_scheme_templates ADD grace_period_late INT DEFAULT 0");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_scheme_templates') AND name = 'grace_period_early')
+            ALTER TABLE payroll_scheme_templates ADD grace_period_early INT DEFAULT 0");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_scheme_templates') AND name = 'min_overtime')
+            ALTER TABLE payroll_scheme_templates ADD min_overtime INT DEFAULT 30");
+
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('attendance_logs') AND name = 'late_hours')
+            ALTER TABLE attendance_logs ADD late_hours DECIMAL(4,1) DEFAULT 0.0");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('attendance_logs') AND name = 'early_leave_hours')
+            ALTER TABLE attendance_logs ADD early_leave_hours DECIMAL(4,1) DEFAULT 0.0");
+
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('overtime_logs') AND name = 'is_rapel')
+            ALTER TABLE overtime_logs ADD is_rapel BIT DEFAULT 0");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('overtime_logs') AND name = 'payout_period')
+            ALTER TABLE overtime_logs ADD payout_period NVARCHAR(20) NULL");
+
+        // 30. Tabel Company Payroll Setting (Early Arrival Rules)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'company_payroll_setting')
+            CREATE TABLE company_payroll_setting (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                early_arrival_enabled BIT DEFAULT 1,
+                max_early_arrival_minutes INT DEFAULT 180,
+                early_arrival_min_minutes INT DEFAULT 30,
+                early_arrival_calculation_unit INT DEFAULT 60,
+                early_arrival_rounding_method NVARCHAR(20) DEFAULT 'CEILING',
+                created_at DATETIME DEFAULT GETDATE(),
+                updated_at DATETIME DEFAULT GETDATE()
+            )");
+
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('company_payroll_setting') AND name = 'early_arrival_min_minutes')
+            ALTER TABLE company_payroll_setting ADD early_arrival_min_minutes INT DEFAULT 30");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('company_payroll_setting') AND name = 'early_arrival_calculation_unit')
+            ALTER TABLE company_payroll_setting ADD early_arrival_calculation_unit INT DEFAULT 60");
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('company_payroll_setting') AND name = 'early_arrival_rounding_method')
+            ALTER TABLE company_payroll_setting ADD early_arrival_rounding_method NVARCHAR(20) DEFAULT 'CEILING'");
+
+        $settingExists = $db->query("SELECT COUNT(*) as [count] FROM company_payroll_setting")->getRow();
+        if ($settingExists && intval($settingExists->count) === 0) {
+            $db->query("INSERT INTO company_payroll_setting (early_arrival_enabled, max_early_arrival_minutes, early_arrival_min_minutes, early_arrival_calculation_unit, early_arrival_rounding_method) VALUES (1, 180, 30, 60, 'CEILING')");
+        }
+
+        // 31. Tabel Early Arrival Logs
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'early_arrival')
+            CREATE TABLE early_arrival (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                attendance_id INT NOT NULL,
+                employee_id INT NOT NULL,
+                date DATE NOT NULL,
+                shift_id INT NULL,
+                shift_start_time NVARCHAR(10) NULL,
+                check_in_time NVARCHAR(10) NULL,
+                early_minutes INT NOT NULL,
+                eligible_minutes INT NOT NULL,
+                status NVARCHAR(20) DEFAULT 'PENDING',
+                approved_by NVARCHAR(100) NULL,
+                approved_at DATETIME NULL,
+                payroll_status NVARCHAR(20) DEFAULT 'NOT_PROCESSED',
+                payroll_period NVARCHAR(20) NULL,
+                created_at DATETIME DEFAULT GETDATE(),
+                updated_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // Ensure early_arrival_minutes, is_manual, and overtime breakdown columns exist in payroll_attendance
+        $paCols = [
+            'early_arrival_minutes' => 'INT DEFAULT 0',
+            'is_manual'             => 'INT DEFAULT 0',
+            'jam_overtime_hari_biasa' => 'DECIMAL(10,2) DEFAULT 0',
+            'jam_overtime_hari_libur' => 'DECIMAL(10,2) DEFAULT 0'
+        ];
+        foreach ($paCols as $col => $definition) {
+            $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_attendance') AND name = '$col')
+                ALTER TABLE payroll_attendance ADD $col $definition");
+        }
+
+        // Ensure calculation breakdown columns exist in payroll_final
+        $pfCols = [
+            'deduction_terlambat'    => 'DECIMAL(15,2) DEFAULT 0',
+            'deduction_pulang_cepat' => 'DECIMAL(15,2) DEFAULT 0',
+            'late_hours'            => 'INT DEFAULT 0',
+            'early_leave_hours'     => 'INT DEFAULT 0',
+            'early_arrival_minutes' => 'INT DEFAULT 0',
+            'early_arrival_pay'     => 'DECIMAL(15,2) DEFAULT 0',
+            'jam_overtime_biasa'      => 'DECIMAL(10,2) DEFAULT 0',
+            'jam_overtime_libur'      => 'DECIMAL(10,2) DEFAULT 0'
+        ];
+        foreach ($pfCols as $col => $definition) {
+            $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('payroll_final') AND name = '$col')
+                ALTER TABLE payroll_final ADD $col $definition");
+        }
+
+        // 32. Tabel Contracts (Kontrak Karyawan)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'contracts')
+            CREATE TABLE contracts (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                employee_id INT NOT NULL,
+                client_id INT NOT NULL,
+                no_kontrak VARCHAR(100) NULL,
+                tgl_mulai DATE NULL,
+                tgl_berakhir DATE NULL,
+                gaji_pokok DECIMAL(15,2) DEFAULT 0,
+                status_pkwt VARCHAR(50) DEFAULT 'Active',
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // 33. Tabel Contract Compensations (Kompensasi PKWT Completed)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'contract_compensations')
+            CREATE TABLE contract_compensations (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                employee_id INT NOT NULL,
+                contract_id INT NULL,
+                client_id INT NOT NULL,
+                basic_salary DECIMAL(15,2) DEFAULT 0,
+                masa_kerja_year INT DEFAULT 0,
+                masa_kerja_month INT DEFAULT 0,
+                masa_kerja_hari INT DEFAULT 0,
+                multiplier DECIMAL(5,2) DEFAULT 1.0,
+                value_kompensasi DECIMAL(15,2) DEFAULT 0,
+                value_kompensasi_final DECIMAL(15,2) DEFAULT 0,
+                status VARCHAR(50) DEFAULT 'Pending',
+                ditetapkan_oleh VARCHAR(100) NULL,
+                ditetapkan_pada DATETIME NULL,
+                disetujui_oleh VARCHAR(100) NULL,
+                disetujui_pada DATETIME NULL,
+                notes TEXT NULL,
+                tgl_mulai_kerja DATE NULL,
+                tgl_akhir_kontrak DATE NULL,
+                created_at DATETIME DEFAULT GETDATE(),
+                updated_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // 34. Tabel User Clients (Mapping Akses Client per User)
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'user_clients')
+            CREATE TABLE user_clients (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                user_id INT NOT NULL,
+                client_id INT NOT NULL,
+                created_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // 35. Tabel Payroll Rapel Adjustments
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'payroll_rapel_adjustments')
+            CREATE TABLE payroll_rapel_adjustments (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                employee_id INT NOT NULL,
+                reference_period NVARCHAR(50) NULL,
+                payment_period NVARCHAR(50) NULL,
+                adjustment_type NVARCHAR(50) NULL,
+                component_name NVARCHAR(100) NULL,
+                previous_amount DECIMAL(15,2) DEFAULT 0,
+                correct_amount DECIMAL(15,2) DEFAULT 0,
+                difference_amount DECIMAL(15,2) DEFAULT 0,
+                reason NVARCHAR(MAX) NULL,
+                status NVARCHAR(50) DEFAULT 'Pending',
+                created_at DATETIME DEFAULT GETDATE(),
+                updated_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // 36. Tabel Dismissed Notifications
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'dismissed_notifications')
+            CREATE TABLE dismissed_notifications (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                notification_id NVARCHAR(150) NOT NULL UNIQUE,
+                dismissed_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // 37. Users Table Enhancements (RBAC - Role Based Access Control)
+        // Pastikan tabel users ada
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'users')
+            CREATE TABLE users (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                username NVARCHAR(100) NOT NULL,
+                email NVARCHAR(100) NULL,
+                password NVARCHAR(255) NOT NULL,
+                role NVARCHAR(50) DEFAULT 'staff',
+                full_name NVARCHAR(200) NULL,
+                is_active TINYINT DEFAULT 1,
+                created_at DATETIME DEFAULT GETDATE(),
+                updated_at DATETIME DEFAULT GETDATE()
+            )");
+
+        // Tambah kolom baru ke tabel users jika belum ada
+        $userCols = [
+            'full_name'  => "NVARCHAR(200) NULL",
+            'is_active'  => "TINYINT DEFAULT 1",
+            'created_at' => "DATETIME DEFAULT GETDATE()",
+            'updated_at' => "DATETIME DEFAULT GETDATE()"
+        ];
+        foreach ($userCols as $col => $definition) {
+            $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('users') AND name = '$col')
+                ALTER TABLE users ADD $col $definition");
+        }
+
+        // Seed admin default jika belum ada user admin
+        $adminExists = $db->query("SELECT COUNT(*) as cnt FROM users WHERE username = 'admin'")->getRow();
+        if (!$adminExists || $adminExists->cnt == 0) {
+            $db->table('users')->insert([
+                'username'  => 'admin',
+                'email'     => 'admin@payroll.com',
+                'password'  => 'admin123',
+                'role'      => 'admin',
+                'full_name' => 'Administrator',
+                'is_active' => 1
+            ]);
+        } else {
+            // Update admin existing agar aktif dan memiliki role admin
+            $db->query("UPDATE users SET is_active = 1, role = 'admin' WHERE username = 'admin'");
+        }
+
+        // Pastikan semua user yang null is_active-nya diset ke 1 (aktif)
+        $db->query("UPDATE users SET is_active = 1 WHERE is_active IS NULL");
+        $db->query("UPDATE users SET role = 'staff' WHERE role IS NULL OR role = ''");
+
+        // ====== FPK (Form Permintaan Karyawan) Tables ======
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'fpk_master')
+            CREATE TABLE fpk_master (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                number_fpk NVARCHAR(50) NOT NULL UNIQUE,
+                nama_fpk NVARCHAR(150) NOT NULL,
+                provinsi NVARCHAR(100) NOT NULL,
+                city NVARCHAR(100) NOT NULL,
+                status NVARCHAR(20) NOT NULL DEFAULT 'Open',
+                created_at DATETIME DEFAULT GETDATE(),
+                updated_at DATETIME DEFAULT GETDATE()
+            )");
+
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'fpk_assignments')
+            CREATE TABLE fpk_assignments (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                fpk_id INT NOT NULL,
+                employee_id INT NOT NULL,
+                nik NVARCHAR(50) NOT NULL,
+                nama_karyawan NVARCHAR(150) NOT NULL,
+                number_fpk NVARCHAR(50) NOT NULL,
+                nama_fpk NVARCHAR(150) NOT NULL,
+                provinsi NVARCHAR(100),
+                city NVARCHAR(100),
+                tanggal_assignment DATETIME DEFAULT GETDATE(),
+                user_submit NVARCHAR(100),
+                status NVARCHAR(20) NOT NULL DEFAULT 'Active',
+                created_at DATETIME DEFAULT GETDATE(),
+                updated_at DATETIME DEFAULT GETDATE()
+            )");
+
+        $db->query("IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('employees') AND name = 'fpk_id')
+            ALTER TABLE employees ADD fpk_id INT NULL");
+
+        return "Migrasi Success! (termasuk kolom absensi overtime, early arrival, dismissed notifications, RBAC users, password resets, dan FPK tables)";
+    }
+
+    /**
+     * Seed data UMP 34 provinsi Indonesia
+     * Akses: /migrasi/seed-ump
+     */
+    public function seedUmp()
+    {
+        $db = \Config\Database::connect();
+        $year = date('Y');
+        
+        // Hapus data lama UMP year ini agar tidak duplikat
+        $db->table('minimum_wages')->where('tipe', 'UMP')->where('year', $year)->delete();
+
+        $provinces = [
+            ['ID 11', 'ACEH', 3413666],
+            ['ID 12', 'SUMATERA UTARA', 2710493],
+            ['ID 13', 'SUMATERA BARAT', 2742476],
+            ['ID 14', 'RIAU', 3191662],
+            ['ID 15', 'JAMBI', 2944448],
+            ['ID 16', 'SUMATERA SELATAN', 3456874],
+            ['ID 17', 'BENGKULU', 2515000],
+            ['ID 18', 'LAMPUNG', 2633284],
+            ['ID 19', 'KEP. BANGKA BELITUNG', 3498479],
+            ['ID 21', 'KEP. RIAU', 3279194],
+            ['ID 31', 'DKI JAKARTA', 5067381],
+            ['ID 32', 'JAWA BARAT', 2057495],
+            ['ID 33', 'JAWA TENGAH', 2036947],
+            ['ID 34', 'DI YOGYAKARTA', 2125897],
+            ['ID 35', 'JAWA TIMUR', 2165244],
+            ['ID 36', 'BANTEN', 2661280],
+            ['ID 51', 'BALI', 2813672],
+            ['ID 52', 'NUSA TENGGARA BARAT', 2371407],
+            ['ID 53', 'NUSA TENGGARA TIMUR', 2123994],
+            ['ID 61', 'KALIMANTAN BARAT', 2608601],
+            ['ID 62', 'KALIMANTAN TENGAH', 3181013],
+            ['ID 63', 'KALIMANTAN SELATAN', 3140443],
+            ['ID 64', 'KALIMANTAN TIMUR', 3202100],
+            ['ID 65', 'KALIMANTAN UTARA', 3251702],
+            ['ID 71', 'SULAWESI UTARA', 3485000],
+            ['ID 72', 'SULAWESI TENGAH', 2599546],
+            ['ID 73', 'SULAWESI SELATAN', 3385145],
+            ['ID 74', 'SULAWESI TENGGARA', 2758984],
+            ['ID 75', 'GORONTALO', 2989350],
+            ['ID 76', 'SULAWESI BARAT', 2678869],
+            ['ID 81', 'MALUKU', 2816554],
+            ['ID 82', 'MALUKU UTARA', 2976720],
+            ['ID 91', 'PAPUA', 3864696],
+            ['ID 92', 'PAPUA BARAT', 3282000],
+        ];
+
+        foreach ($provinces as $prov) {
+            $db->table('minimum_wages')->insert([
+                'tipe'         => 'UMP',
+                'kode_daerah'  => $prov[0],
+                'nama_daerah'  => $prov[1],
+                'nominal'      => $prov[2],
+                'year'        => $year,
+            ]);
+        }
+
+        return "Successfully seed " . count($provinces) . " data UMP provinsi Indonesia year " . $year . "!";
+    }
+}

@@ -1,0 +1,1025 @@
+// === Attendance Module ===
+
+let currentAttendanceLogs = [];
+let editingAttendanceLogId = null;
+let currentAttendanceSummaryData = null;
+
+async function loadAttendanceClients() {
+    const select = document.getElementById('attendanceClientSelect');
+    if (!select) return;
+    const currentVal = select.value;
+    try {
+        const res = await fetch(`${API_URL}/clients`);
+        const clients = await res.json();
+        select.innerHTML = '<option value="">-- Select Client --</option>';
+        clients.forEach(c => {
+            select.innerHTML += `<option value="${c.id}">${c.nama}</option>`;
+        });
+        if (currentVal && Array.from(select.options).some(opt => opt.value == currentVal)) {
+            select.value = currentVal;
+            if (typeof loadAttendanceLogs === 'function') {
+                loadAttendanceLogs();
+            }
+        }
+        if (typeof syncCustomClientDropdown === 'function') {
+            syncCustomClientDropdown();
+        }
+    } catch(e) { console.error(e); }
+}
+
+async function loadAttendanceLogs() {
+    const tbody = document.getElementById('attendanceTableBody');
+    if (!tbody) return;
+    const clientId = document.getElementById('attendanceClientSelect')?.value;
+    const month = document.getElementById('attendanceMonthSelect')?.value;
+    const year = document.getElementById('attendanceYearSelect')?.value;
+
+    const searchInput = document.getElementById('attendanceSearchInput');
+    if (searchInput) searchInput.value = '';
+
+    // Hide late upload banners by default
+    document.querySelectorAll('#attendanceLateUploadRemark').forEach(banner => banner.style.display = 'none');
+
+    if (!clientId) {
+        tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:#94a3b8;">
+            <i class="fas fa-clipboard-check" style="font-size:32px;margin-bottom:8px;display:block;color:#cbd5e1;"></i>
+            Please select a client first.</td></tr>`;
+        return;
+    }
+
+    // Sinkronisasi selectedClientId secara global
+    window.selectedClientId = clientId;
+
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:#94a3b8;">
+        <i class="fas fa-spinner fa-spin" style="font-size:24px;margin-bottom:8px;display:block;"></i>Loading data...</td></tr>`;
+
+    try {
+        const res = await fetch(`${API_URL}/attendance-logs?client_id=${clientId}&month=${month}&year=${year}`);
+        const data = await res.json();
+        currentAttendanceLogs = Array.isArray(data) ? data : (data.data || []);
+
+        // Handle late upload banner
+        const lateUploadBanners = document.querySelectorAll('#attendanceLateUploadRemark');
+        const cutoffLabels = document.querySelectorAll('#attendanceCutoffDateLabel');
+        
+        if (data && data.is_late_upload) {
+            let formattedDate = data.cutoff_date || '';
+            if (data.cutoff_date) {
+                const dateParts = data.cutoff_date.split('-');
+                if (dateParts.length === 3) {
+                    const months = [
+                        'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+                        'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+                    ];
+                    const day = parseInt(dateParts[2]);
+                    const monthIdx = parseInt(dateParts[1]) - 1;
+                    const year = dateParts[0];
+                    if (monthIdx >= 0 && monthIdx < 12) {
+                        formattedDate = `${day} ${months[monthIdx]} ${year}`;
+                    }
+                }
+            }
+            
+            lateUploadBanners.forEach(banner => {
+                banner.style.display = 'flex';
+            });
+            cutoffLabels.forEach(label => {
+                label.innerText = formattedDate;
+            });
+        } else {
+            lateUploadBanners.forEach(banner => {
+                banner.style.display = 'none';
+            });
+        }
+
+        // Update summary cards (Work Hours Aktual, Work Hours Seharusnya, Tenure)
+        if (data && data.summary) {
+            currentAttendanceSummaryData = data.summary;
+            const actualHrs = data.summary.total_actual_hours || 0;
+            const expectedHrs = data.summary.expected_hours || 0;
+            const avgTenure = data.summary.avg_tenure_months || 0;
+
+            const actualFormatted = `${actualHrs} <span style="font-size: 13px; font-weight: 600;">Jam</span>`;
+            const expectedFormatted = `${expectedHrs} <span style="font-size: 13px; font-weight: 600;">Jam</span>`;
+            const tenureFormatted = `${avgTenure} <span style="font-size: 13px; font-weight: 600;">Month</span>`;
+
+            const elActual = document.getElementById('summaryActualHours');
+            const elExpected = document.getElementById('summaryExpectedHours');
+            const elTenure = document.getElementById('summaryTenureMonths');
+            if (elActual) elActual.innerHTML = actualFormatted;
+            if (elExpected) elExpected.innerHTML = expectedFormatted;
+            if (elTenure) elTenure.innerHTML = tenureFormatted;
+
+            document.querySelectorAll('.summaryActualHoursVal').forEach(el => el.innerHTML = actualFormatted);
+            document.querySelectorAll('.summaryExpectedHoursVal').forEach(el => el.innerHTML = expectedFormatted);
+            document.querySelectorAll('.summaryTenureMonthsVal').forEach(el => el.innerHTML = tenureFormatted);
+        }
+
+        if (!currentAttendanceLogs || currentAttendanceLogs.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:#94a3b8;">
+                <i class="fas fa-clipboard-check" style="font-size:32px;margin-bottom:8px;display:block;color:#cbd5e1;"></i>
+                No attendance data available for this period.</td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = currentAttendanceLogs.map((a, i) => {
+            const dateParts = a.tanggal.split('-');
+            const d = new Date(dateParts[0], dateParts[1] - 1, dateParts[2]);
+            const tanggalFormatted = d.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' });
+            
+            // Holiday detection from API
+            const isHolidayFlag = parseInt(a.is_holiday) === 1;
+            const holidayName = a.holiday_name || '';
+            const isPublicHoliday = isHolidayFlag && holidayName && !holidayName.startsWith('Day Week') && !holidayName.startsWith('Day Sabtu');
+
+            // Build shift status badges
+            let shiftBadges = '';
+
+            // Holiday badge (shown first for prominence)
+            if (isPublicHoliday) {
+                shiftBadges += `<span style="background:#fef2f2;color:#dc2626;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;margin-left:5px;" title="${holidayName}"><i class="fas fa-calendar-day" style="margin-right:3px;font-size:10px;"></i>${holidayName}</span>`;
+            }
+
+            if (parseInt(a.is_incomplete) === 1) {
+                shiftBadges += `<span style="background:#fee2e2;color:#991b1b;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;margin-left:5px;">Incomplete</span>`;
+            }
+            if (parseInt(a.is_rapel) === 1) {
+                shiftBadges += `<span style="background:#dbeafe;color:#1e40af;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;margin-left:5px;">Rapel (${a.payout_period})</span>`;
+            }
+
+            const statusNorm = (a.status || '').toLowerCase().trim();
+            let isLibur = false;
+            if (statusNorm === 'day off' || statusNorm === 'off') {
+                shiftBadges += `<span style="background:#f1f5f9;color:#475569;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;margin-left:5px;">Day Off</span>`;
+                isLibur = true;
+            } else if (statusNorm === 'alfa' || statusNorm === 'absent') {
+                shiftBadges += `<span style="background:#fee2e2;color:#b91c1c;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;margin-left:5px;">Alfa</span>`;
+            } else if (statusNorm === 'sakit' || statusNorm === 'sick') {
+                shiftBadges += `<span style="background:#fef3c7;color:#b45309;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;margin-left:5px;">Sakit</span>`;
+            } else if (statusNorm === 'izin' || statusNorm === 'leave') {
+                shiftBadges += `<span style="background:#e0f2fe;color:#0369a1;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;margin-left:5px;">Izin</span>`;
+            } else if ((statusNorm === 'hadir' || statusNorm === 'present') && parseInt(a.is_incomplete) !== 1) {
+                shiftBadges += `<span style="background:#e8fdf0;color:#15803d;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;margin-left:5px;">Hadir</span>`;
+            }
+
+            // Row styling: public holidays get red tint, regular off days get grey tint
+            let rowStyle = 'border-bottom: 1px solid #f1f5f9;';
+            if (isPublicHoliday) {
+                rowStyle = 'border-bottom: 1px solid #fecaca; background-color: #fff5f5; border-left: 3px solid #ef4444;';
+            } else if (isLibur || isHolidayFlag) {
+                rowStyle = 'border-bottom: 1px solid #f1f5f9; background-color: #f8fafc; color: #94a3b8; opacity: 0.85;';
+            }
+
+            // OT label: show special icon for holiday overtime
+            const otHours = parseFloat(a.calculated_overtime_hours || 0);
+            let otLabel = `<small style="color:var(--success);">OT: ${otHours.toFixed(1)}j</small>`;
+            if (isHolidayFlag && otHours > 0) {
+                otLabel = `<small style="color:#dc2626;font-weight:600;"><i class="fas fa-star" style="font-size:9px;margin-right:2px;"></i>OT Libur: ${otHours.toFixed(1)}j</small>`;
+            }
+
+            // Early Arrival formatting
+            const eaMins = parseInt(a.ea_eligible_minutes) || 0;
+            const eaStatus = a.ea_status || '';
+            let eaLabel = '<span style="color:#94a3b8;font-style:italic;">-</span>';
+            if (eaMins > 0) {
+                const eaHrs = eaMins / 60;
+                const eaHrsStr = (eaHrs % 1 === 0 ? eaHrs : eaHrs.toFixed(1)) + 'j';
+                const statusStr = (eaStatus || 'PENDING').toUpperCase();
+                
+                let badgeBg = '#fff7ed'; // Pending orange
+                let badgeColor = '#c2410c';
+                if (statusStr === 'APPROVED' || statusStr === 'PROCESSED') {
+                    badgeBg = '#e8fdf0'; // Green
+                    badgeColor = '#15803d';
+                } else if (statusStr === 'REJECTED') {
+                    badgeBg = '#fee2e2'; // Red
+                    badgeColor = '#b91c1c';
+                }
+                
+                eaLabel = `<span style="background:${badgeBg};color:${badgeColor};padding:4px 8px;border-radius:6px;font-size:11px;font-weight:700;display:inline-block;" title="Status: ${statusStr}">
+                    ${eaHrsStr} (${statusStr})
+                </span>`;
+            }
+
+            return `<tr data-employee-id="${a.employee_id || ''}" data-employee-name="${(a.employee_name || '').toLowerCase()}" data-shift-name="${(a.shift_name || 'default').toLowerCase()}" style="${rowStyle}">
+                <td style="text-align:center;padding:12px;color:#64748b;">${i+1}</td>
+                <td style="padding:12px;font-weight:600;color:#1e293b;">${a.employee_name || '-'}</td>
+                <td style="text-align:center;padding:12px;color:#475569;">${tanggalFormatted}</td>
+                <td style="padding:12px;font-weight:600;color:#475569;">
+                    ${a.shift_name || '<span style="color:#94a3b8;font-style:italic;">Default</span>'}
+                    ${shiftBadges}
+                </td>
+                <td style="text-align:center;padding:12px;color:#475569;">${formatTimeHM(a.jam_masuk)}</td>
+                <td style="text-align:center;padding:12px;color:#475569;">${formatTimeHM(a.jam_keluar)}</td>
+                <td style="text-align:center;padding:12px;color:#475569;font-weight:700;">
+                    ${parseFloat(a.calculated_work_hours || 0).toFixed(1)}j<br>
+                    ${otLabel}
+                </td>
+                <td style="text-align:center;padding:12px;">${eaLabel}</td>
+
+                <td style="text-align:center;padding:12px;white-space:nowrap;">
+                    <button onclick="editAttendanceLog(${a.id})" style="background:#f1f5f9;color:#475569;border:none;border-radius:6px;padding:6px 10px;cursor:pointer;font-size:13px;margin-right:4px;" title="Edit">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                    <button onclick="deleteAttendanceLog(${a.id})" style="background:#fee2e2;color:#dc2626;border:none;border-radius:6px;padding:6px 10px;cursor:pointer;font-size:13px;" title="Delete">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </td>
+            </tr>`;
+        }).join('');
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:#ef4444;">Failed to load data: ${e.message}</td></tr>`;
+    }
+}
+
+async function loadAttendanceEmployees() {
+    const select = document.getElementById('attendanceEmployeeSelect');
+    if (!select) return;
+    const clientId = document.getElementById('attendanceClientSelect')?.value;
+    if (!clientId) { select.innerHTML = '<option value="">-- Select Employee --</option>'; return; }
+
+    try {
+        const res = await fetch(`${API_URL}/employees?client_id=${clientId}`);
+        const emps = await res.json();
+        select.innerHTML = '<option value="">-- Select Employee --</option>';
+        (emps.data || emps).forEach(e => {
+            select.innerHTML += `<option value="${e.id}">${e.nama}</option>`;
+        });
+    } catch(e) { console.error(e); }
+}
+
+function bukaModalAttendance() {
+    const clientId = document.getElementById('attendanceClientSelect')?.value;
+    if (!clientId) { showToast('Please select a client first!', 'error'); return; }
+    document.getElementById('attendanceForm')?.reset();
+    document.getElementById('attendanceModalTitle').innerText = 'Input Kehadiran';
+    editingAttendanceLogId = null;
+    const employeeSelect = document.getElementById('attendanceEmployeeSelect');
+    if (employeeSelect) {
+        employeeSelect.disabled = false;
+    }
+    const tanggalInput = document.getElementById('attendanceTanggal');
+    if (tanggalInput) {
+        tanggalInput.disabled = false;
+        const now = new Date();
+        const curYear = now.getFullYear();
+        const curMonth = now.getMonth() + 1;
+
+        const selMonth = parseInt(document.getElementById('attendanceMonthSelect')?.value || curMonth);
+        const selYear = parseInt(document.getElementById('attendanceYearSelect')?.value || curYear);
+
+        if (selMonth === curMonth && selYear === curYear) {
+            const today = now.toISOString().split('T')[0];
+            tanggalInput.value = today;
+        } else {
+            const formattedMonth = String(selMonth).padStart(2, '0');
+            tanggalInput.value = `${selYear}-${formattedMonth}-01`;
+        }
+    }
+    loadAttendanceEmployees();
+    openModal('attendanceModal');
+
+    // Bind auto-check listeners setelah modal terbuka
+    setTimeout(() => {
+        const empSelect = document.getElementById('attendanceEmployeeSelect');
+        const dateInput = document.getElementById('attendanceTanggal');
+        if (empSelect && !empSelect._autoCheckBound) {
+            empSelect.addEventListener('change', checkExistingAttendance);
+            empSelect._autoCheckBound = true;
+        }
+        if (dateInput && !dateInput._autoCheckBound) {
+            dateInput.addEventListener('change', checkExistingAttendance);
+            dateInput._autoCheckBound = true;
+        }
+    }, 100);
+}
+
+// Auto-deteksi data kehadiran yang sudah ada saat karyawan & tanggal dipilih
+async function checkExistingAttendance() {
+    const empSelect = document.getElementById('attendanceEmployeeSelect');
+    const dateInput = document.getElementById('attendanceTanggal');
+    const employeeId = empSelect?.value;
+    const tanggal = dateInput?.value;
+
+    // Jika select karyawan atau input tanggal dinonaktifkan, berarti sedang mode edit manual dari tabel (tidak perlu check)
+    if (empSelect?.disabled || dateInput?.disabled) return;
+
+    if (!employeeId || !tanggal) return;
+
+    try {
+        const res = await fetch(`${API_URL}/attendance-logs?employee_id=${employeeId}&tanggal=${tanggal}`);
+        const data = await res.json();
+        const logs = Array.isArray(data) ? data : (data.data || []);
+
+        const statusInput = document.getElementById('attendanceStatus');
+        const jamMasukInput = document.getElementById('attendanceJamMasuk');
+        const jamKeluarInput = document.getElementById('attendanceJamKeluar');
+        const descriptionInput = document.getElementById('attendanceDescription');
+
+        if (logs.length > 0) {
+            const existing = logs[0];
+            // Auto-fill form dengan data yang sudah ada
+            if (statusInput) statusInput.value = existing.status || 'Hadir';
+            if (jamMasukInput) jamMasukInput.value = existing.jam_masuk || '';
+            if (jamKeluarInput) jamKeluarInput.value = existing.jam_keluar || '';
+            if (descriptionInput) descriptionInput.value = existing.description || '';
+
+            // Beralih ke mode edit
+            editingAttendanceLogId = existing.id;
+            document.getElementById('attendanceModalTitle').innerText = 'Edit Kehadiran (Data Ditemukan)';
+            showToast('Attendance data found, form has been auto-filled.', 'info');
+        } else {
+            // Reset ke mode tambah baru
+            editingAttendanceLogId = null;
+            document.getElementById('attendanceModalTitle').innerText = 'Input Kehadiran';
+            
+            // Bersihkan field yang sempat terisi otomatis
+            if (statusInput) statusInput.value = 'Hadir';
+            if (jamMasukInput) jamMasukInput.value = '';
+            if (jamKeluarInput) jamKeluarInput.value = '';
+            if (descriptionInput) descriptionInput.value = '';
+        }
+    } catch (e) {
+        console.error('Auto-check attendance error:', e);
+    }
+}
+
+async function simpanAttendance(e) {
+    e.preventDefault();
+    const employeeId = document.getElementById('attendanceEmployeeSelect')?.value;
+    const tanggal = document.getElementById('attendanceTanggal')?.value;
+    const status = document.getElementById('attendanceStatus')?.value;
+    const jamMasuk = document.getElementById('attendanceJamMasuk')?.value;
+    const jamKeluar = document.getElementById('attendanceJamKeluar')?.value;
+    const description = document.getElementById('attendanceDescription')?.value;
+
+    if (!employeeId || !tanggal) {
+        showToast('Karyawan dan tanggal required!', 'error');
+        return;
+    }
+
+    try {
+        let url = `${API_URL}/attendance-logs`;
+        let method = 'POST';
+        if (editingAttendanceLogId) {
+            url += `/${editingAttendanceLogId}`;
+            method = 'PUT';
+        }
+        
+        const res = await fetch(url, {
+            method: method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ employee_id: employeeId, tanggal, status, jam_masuk: jamMasuk, jam_keluar: jamKeluar, description })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            let errorMsg = data.messages?.error || data.message || data.error;
+            if (data.messages && typeof data.messages === 'object') {
+                errorMsg = Object.values(data.messages).join(', ');
+            } else if (data.messages && typeof data.messages === 'string') {
+                errorMsg = data.messages;
+            }
+            showToast(errorMsg || 'Failed to save attendance!', 'error');
+            return;
+        }
+        showToast(data.message || 'Attendance saved successfully!', 'success');
+        closeModal('attendanceModal');
+
+        // Auto-update filter dropdowns to the payout period of the saved log
+        if (data.payout_period) {
+            const parts = data.payout_period.split('-');
+            if (parts.length === 2) {
+                const monthVal = parseInt(parts[0]);
+                const yearVal = parseInt(parts[1]);
+                const monthSelect = document.getElementById('attendanceMonthSelect');
+                const yearSelect = document.getElementById('attendanceYearSelect');
+                if (monthSelect) monthSelect.value = monthVal;
+                if (yearSelect) yearSelect.value = yearVal;
+            }
+        } else {
+            const dateParts = tanggal.split('-');
+            if (dateParts.length === 3) {
+                const yearVal = parseInt(dateParts[0]);
+                const monthVal = parseInt(dateParts[1]);
+                const monthSelect = document.getElementById('attendanceMonthSelect');
+                const yearSelect = document.getElementById('attendanceYearSelect');
+                if (monthSelect) monthSelect.value = monthVal;
+                if (yearSelect) yearSelect.value = yearVal;
+            }
+        }
+
+        loadAttendanceLogs();
+    } catch (e) {
+        showToast('Error: ' + e.message, 'error');
+    }
+}
+
+async function deleteAttendanceLog(id) {
+    if (!await showConfirm('Are you sure you want to delete this attendance log?')) return;
+    try {
+        await fetch(`${API_URL}/attendance-logs/${id}`, { method: 'DELETE' });
+        showToast('Attendance log deleted successfully!', 'success');
+        loadAttendanceLogs();
+    } catch (e) {
+        showToast('Error: ' + e.message, 'error');
+    }
+}
+
+async function downloadMainAbsensiTemplate() {
+    const clientId = document.getElementById('attendanceClientSelect')?.value;
+    const month = document.getElementById('attendanceMonthSelect')?.value;
+    const year = document.getElementById('attendanceYearSelect')?.value;
+
+    if (!clientId) {
+        showToast('Please select a client first.', 'warning');
+        return;
+    }
+
+    showToast('Menyiapkan template absensi...', 'info');
+
+    try {
+        // 1. Get or create the period for this month & year
+        const resPeriods = await fetch(`${API_URL}/periods?client_id=${clientId}`);
+        let periods = resPeriods.ok ? await resPeriods.json() : [];
+
+        let activePeriod = periods.find(p => parseInt(p.month) == parseInt(month) && parseInt(p.year) == parseInt(year));
+        if (!activePeriod) {
+            // Auto create period
+            const createRes = await fetch(`${API_URL}/periods`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    client_id: parseInt(clientId),
+                    month: parseInt(month),
+                    year: parseInt(year)
+                })
+            });
+            if (createRes.ok) {
+                const refetchRes = await fetch(`${API_URL}/periods?client_id=${clientId}`);
+                periods = refetchRes.ok ? await refetchRes.json() : [];
+                activePeriod = periods.find(p => parseInt(p.month) == parseInt(month) && parseInt(p.year) == parseInt(year));
+            }
+        }
+
+        if (!activePeriod) {
+            showToast('Failed to load atau membuat period payroll.', 'error');
+            return;
+        }
+
+        // 2. Fetch employees for this period
+        const resEmp = await fetch(`${API_URL}/attendance/${activePeriod.id}?client_id=${clientId}`);
+        if (!resEmp.ok) throw new Error('HTTP ' + resEmp.status);
+        const employees = await resEmp.json();
+
+        if (employees.length === 0) {
+            showToast('Tidak ada karyawan aktif untuk membuat template.', 'warning');
+            return;
+        }
+
+        // 3. Fetch holidays for the month
+        const mVal = parseInt(activePeriod.month);
+        const yVal = parseInt(activePeriod.year);
+        const daysInMonth = new Date(yVal, mVal, 0).getDate();
+
+        let holidayMap = {};
+        try {
+            const resHolidays = await fetch(`${API_URL}/holidays?year=${yVal}`);
+            if (resHolidays.ok) {
+                const holidayList = await resHolidays.json();
+                (Array.isArray(holidayList) ? holidayList : []).forEach(h => {
+                    const hDate = (h.tanggal || '').substring(0, 10);
+                    if (hDate) holidayMap[hDate] = h.deskripsi || 'Holiday';
+                });
+            }
+        } catch(e) { console.warn('Could not load holidays for template:', e); }
+        
+        const dayNames = ["Week", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+        const templateData = [];
+
+        employees.forEach(emp => {
+            const empId = emp.employ_id || emp.nik || '';
+            const empName = emp.employee_name || '';
+            const workDaysConfig = parseInt(emp.employee_hari_kerja || emp.position_hari_kerja || 5);
+            const joinDate = (emp.tgl_masuk || emp.start_contract || '').substring(0, 10);
+
+            for (let d = 1; d <= daysInMonth; d++) {
+                const dateObj = new Date(yVal, mVal - 1, d);
+                const dayOfWeek = dateObj.getDay();
+                const dateStr = `${yVal}-${String(mVal).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                
+                // Skip dates prior to employee's join date
+                if (joinDate && dateStr < joinDate) {
+                    continue;
+                }
+
+                const dayName = dayNames[dayOfWeek];
+                const tglDayStr = `${dateStr} ${dayName}`;
+
+                let jamMasuk = '08:00';
+                let jamKeluar = '17:00';
+
+                // Determine if it is a rest day (weekend)
+                let isRestDay = false;
+                if (workDaysConfig === 5) {
+                    isRestDay = (dayOfWeek === 0 || dayOfWeek === 6); // Sat, Sun
+                } else if (workDaysConfig === 6) {
+                    isRestDay = (dayOfWeek === 0); // Sun
+                }
+
+                // Check if it's a public holiday from holiday_calendar
+                const isPublicHoliday = !!holidayMap[dateStr];
+
+                if (isRestDay || isPublicHoliday) {
+                    jamMasuk = '';
+                    jamKeluar = '';
+                }
+
+                let status = 'Hadir';
+                if (isPublicHoliday) {
+                    status = 'Off'; // Public holiday → Off
+                } else if (isRestDay) {
+                    status = 'Off'; // Weekend rest day → Off
+                }
+
+                templateData.push({
+                    'Employee ID': empId,
+                    'Nama': empName,
+                    'Tgl dan Day': tglDayStr,
+                    'Shift': '',
+                    'Clock In Time': jamMasuk,
+                    'Clock Out Time': jamKeluar,
+                    'Status': status
+                });
+            }
+        });
+
+        const worksheet = XLSX.utils.json_to_sheet(templateData);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Attendance Template");
+        
+        // Auto-fit column widths
+        const max_widths = [15, 25, 20, 12, 12, 12, 12];
+        worksheet['!cols'] = max_widths.map(w => ({ wch: w }));
+
+        const filename = `Attendance_Template_${activePeriod.nama.replace(/\s+/g, '_')}.xlsx`;
+        XLSX.writeFile(workbook, filename);
+        showToast('Template downloaded successfully!', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Failed to load template: ' + err.message, 'error');
+    }
+}
+
+window.downloadMainAbsensiTemplate = downloadMainAbsensiTemplate;
+
+function filterAttendanceTable() {
+    const input = document.getElementById('attendanceSearchInput');
+    if (!input) return;
+    const filter = input.value.toLowerCase().trim();
+    const tbody = document.getElementById('attendanceTableBody');
+    if (!tbody) return;
+    const rows = tbody.getElementsByTagName('tr');
+    
+    for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (row.querySelector('td[colspan]')) {
+            continue;
+        }
+        
+        const empId = (row.getAttribute('data-employee-id') || '').toLowerCase();
+        const empName = (row.getAttribute('data-employee-name') || '').toLowerCase();
+        const shiftName = (row.getAttribute('data-shift-name') || '').toLowerCase();
+        
+        if (empName.includes(filter) || empId.includes(filter) || shiftName.includes(filter)) {
+            row.style.display = "";
+        } else {
+            row.style.display = "none";
+        }
+    }
+}
+
+window.filterAttendanceTable = filterAttendanceTable;
+
+function syncCustomClientDropdown() {
+    const nativeSelect = document.getElementById('attendanceClientSelect');
+    const container = document.getElementById('attendanceClientOptionsContainer');
+    const selectedTextSpan = document.getElementById('attendanceClientSelectedText');
+    if (!nativeSelect || !container) return;
+
+    container.innerHTML = '';
+
+    Array.from(nativeSelect.options).forEach(option => {
+        if (!option.value) return; // Skip placeholder option
+        const optionDiv = document.createElement('div');
+        optionDiv.innerText = option.text;
+        optionDiv.setAttribute('data-value', option.value);
+        optionDiv.style.padding = '10px 14px';
+        optionDiv.style.borderRadius = '6px';
+        optionDiv.style.cursor = 'pointer';
+        optionDiv.style.fontSize = '13.5px';
+        optionDiv.style.color = '#334155';
+        optionDiv.style.fontWeight = '600';
+        optionDiv.style.transition = 'all 0.15s';
+        
+        optionDiv.onmouseover = () => {
+            optionDiv.style.background = '#f1f5f9';
+            optionDiv.style.color = 'var(--primary-color)';
+        };
+        optionDiv.onmouseout = () => {
+            optionDiv.style.background = 'transparent';
+            optionDiv.style.color = '#334155';
+        };
+        optionDiv.onclick = () => {
+            nativeSelect.value = option.value;
+            if (selectedTextSpan) {
+                selectedTextSpan.innerText = option.text;
+            }
+            
+            const event = new Event('change', { bubbles: true });
+            nativeSelect.dispatchEvent(event);
+            
+            closeAttendanceClientDropdown();
+        };
+        
+        container.appendChild(optionDiv);
+    });
+
+    const selectedOption = nativeSelect.options[nativeSelect.selectedIndex];
+    if (selectedOption && selectedTextSpan) {
+        selectedTextSpan.innerText = selectedOption.text;
+    }
+}
+
+function toggleAttendanceClientDropdown(event) {
+    event.stopPropagation();
+    const panel = document.getElementById('attendanceClientDropdownPanel');
+    const arrow = document.querySelector('#attendanceClientDropdownTrigger i');
+    if (!panel) return;
+
+    const isVisible = panel.style.display === 'block';
+    
+    closeAttendanceClientDropdown();
+    
+    if (!isVisible) {
+        panel.style.display = 'block';
+        if (arrow) arrow.style.transform = 'translateY(-50%) rotate(180deg)';
+        const searchInput = document.getElementById('attendanceClientSearchInput');
+        if (searchInput) {
+            searchInput.value = '';
+            searchInput.focus();
+            filterClientDropdownOptions();
+        }
+    }
+}
+
+function closeAttendanceClientDropdown() {
+    const panel = document.getElementById('attendanceClientDropdownPanel');
+    const arrow = document.querySelector('#attendanceClientDropdownTrigger i');
+    if (panel) panel.style.display = 'none';
+    if (arrow) arrow.style.transform = 'translateY(-50%)';
+}
+
+function filterClientDropdownOptions() {
+    const searchVal = (document.getElementById('attendanceClientSearchInput')?.value || '').toLowerCase().trim();
+    const container = document.getElementById('attendanceClientOptionsContainer');
+    if (!container) return;
+    const divs = container.getElementsByTagName('div');
+    
+    for (let i = 0; i < divs.length; i++) {
+        const div = divs[i];
+        const text = div.innerText.toLowerCase();
+        if (text.includes(searchVal)) {
+            div.style.display = 'block';
+        } else {
+            div.style.display = 'none';
+        }
+    }
+}
+
+function editAttendanceLog(id) {
+    const log = currentAttendanceLogs.find(x => x.id === id);
+    if (!log) return;
+    
+    editingAttendanceLogId = id;
+    document.getElementById('attendanceModalTitle').innerText = 'Edit Kehadiran';
+    
+    const employeeSelect = document.getElementById('attendanceEmployeeSelect');
+    if (employeeSelect) {
+        employeeSelect.innerHTML = `<option value="${log.employee_id}">${log.employee_name || 'Karyawan'}</option>`;
+        employeeSelect.value = log.employee_id;
+        employeeSelect.disabled = true;
+    }
+    
+    const tanggalInput = document.getElementById('attendanceTanggal');
+    if (tanggalInput) {
+        tanggalInput.value = log.tanggal;
+        tanggalInput.disabled = true;
+    }
+    
+    const statusInput = document.getElementById('attendanceStatus');
+    if (statusInput) statusInput.value = log.status;
+    
+    const jamMasukInput = document.getElementById('attendanceJamMasuk');
+    if (jamMasukInput) jamMasukInput.value = log.jam_masuk || '';
+    
+    const jamKeluarInput = document.getElementById('attendanceJamKeluar');
+    if (jamKeluarInput) jamKeluarInput.value = log.jam_keluar || '';
+    
+    const descriptionInput = document.getElementById('attendanceDescription');
+    if (descriptionInput) descriptionInput.value = log.description || '';
+    
+    openModal('attendanceModal');
+}
+
+document.addEventListener('click', function(e) {
+    const wrapper = document.querySelector('.custom-select-wrapper');
+    if (wrapper && !wrapper.contains(e.target)) {
+        closeAttendanceClientDropdown();
+    }
+});
+
+window.syncCustomClientDropdown = syncCustomClientDropdown;
+window.toggleAttendanceClientDropdown = toggleAttendanceClientDropdown;
+window.closeAttendanceClientDropdown = closeAttendanceClientDropdown;
+window.filterClientDropdownOptions = filterClientDropdownOptions;
+window.editAttendanceLog = editAttendanceLog;
+window.deleteAttendanceLog = deleteAttendanceLog;
+window.bukaModalAttendance = bukaModalAttendance;
+window.simpanAttendance = simpanAttendance;
+window.loadAttendanceLogs = loadAttendanceLogs;
+window.loadAttendanceClients = loadAttendanceClients;
+
+// ===== ATTENDANCE SUMMARY CARD DETAIL MODAL =====
+function showAttendanceSummaryDetail(type) {
+    const modal = document.getElementById('modalAttendanceCardDetail');
+    if (!modal) return;
+
+    const header = document.getElementById('modalAttDetailHeader');
+    const icon = document.getElementById('modalAttDetailIcon');
+    const title = document.getElementById('modalAttDetailTitle');
+    const subtitle = document.getElementById('modalAttDetailSubtitle');
+    const statBanner = document.getElementById('modalAttDetailStatBanner');
+    const thead = document.getElementById('modalAttDetailThead');
+    const searchInput = document.getElementById('searchAttDetailInput');
+    if (searchInput) searchInput.value = '';
+
+    const summary = currentAttendanceSummaryData || {};
+    const logs = currentAttendanceLogs || [];
+
+    if (type === 'actual') {
+        header.style.background = 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)';
+        icon.className = 'fas fa-user-clock';
+        title.innerText = 'Detail Work Hours Aktual Karyawan';
+        subtitle.innerText = 'Details akumulasi work hours dan overtime per karyawan pada period ini';
+
+        const empMap = {};
+        logs.forEach(l => {
+            const empId = l.employee_id || l.employee_name;
+            if (!empMap[empId]) {
+                empMap[empId] = {
+                    name: l.employee_name || 'Karyawan',
+                    position: l.position_name || l.department_name || '-',
+                    presentDays: 0,
+                    actualHours: 0,
+                    overtimeHours: 0
+                };
+            }
+            if (l.jam_masuk && l.jam_masuk !== '-') empMap[empId].presentDays++;
+            empMap[empId].actualHours += parseFloat(l.calculated_work_hours || 0);
+            empMap[empId].overtimeHours += parseFloat(l.calculated_overtime_hours || 0);
+        });
+
+        const empList = Object.values(empMap);
+        const totalActual = summary.total_actual_hours || empList.reduce((acc, e) => acc + e.actualHours, 0);
+
+        statBanner.innerHTML = `
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; padding: 14px 18px;">
+                <div>
+                    <span style="font-size: 11px; color: #1e40af; font-weight: 700; text-transform: uppercase;">Total Work Hours Aktual</span>
+                    <h4 style="margin: 2px 0 0 0; font-size: 20px; font-weight: 800; color: #1e3a8a;">${totalActual.toFixed(1)} Jam</h4>
+                </div>
+                <div>
+                    <span style="font-size: 11px; color: #1e40af; font-weight: 700; text-transform: uppercase;">Total Employees Active</span>
+                    <h4 style="margin: 2px 0 0 0; font-size: 20px; font-weight: 800; color: #1d4ed8;">${empList.length} Orang</h4>
+                </div>
+                <div>
+                    <span style="font-size: 11px; color: #1e40af; font-weight: 700; text-transform: uppercase;">Average per Karyawan</span>
+                    <h4 style="margin: 2px 0 0 0; font-size: 20px; font-weight: 800; color: #2563eb;">${empList.length > 0 ? (totalActual / empList.length).toFixed(1) : 0} Jam</h4>
+                </div>
+            </div>
+        `;
+
+        thead.innerHTML = `
+            <tr style="background: #f8fafc; border-bottom: 2px solid #e2e8f0; color: #475569;">
+                <th style="padding: 12px 14px; text-align: left; font-weight: 700;">No</th>
+                <th style="padding: 12px 14px; text-align: left; font-weight: 700;">Employee Name</th>
+                <th style="padding: 12px 14px; text-align: left; font-weight: 700;">Position / Department</th>
+                <th style="padding: 12px 14px; text-align: center; font-weight: 700;">Day Hadir</th>
+                <th style="padding: 12px 14px; text-align: right; font-weight: 700;">Work Hours Aktual</th>
+                <th style="padding: 12px 14px; text-align: right; font-weight: 700;">Jam Overtime</th>
+            </tr>
+        `;
+
+        renderAttDetailTableRows(empList.map((e, idx) => `
+            <tr class="att-detail-row" data-search="${e.name.toLowerCase()} ${e.position.toLowerCase()}" style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 10px 14px;">${idx + 1}</td>
+                <td style="padding: 10px 14px; font-weight: 600; color: #1e293b;">${e.name}</td>
+                <td style="padding: 10px 14px; color: #64748b;">${e.position}</td>
+                <td style="padding: 10px 14px; text-align: center;"><span style="background: #f0fdf4; color: #16a34a; font-weight: 700; padding: 2px 8px; border-radius: 4px; font-size: 12px;">${e.presentDays} Day</span></td>
+                <td style="padding: 10px 14px; text-align: right; font-weight: 700; color: #1e3a8a;">${e.actualHours.toFixed(1)} Jam</td>
+                <td style="padding: 10px 14px; text-align: right; font-weight: 700; color: #d97706;">${e.overtimeHours.toFixed(1)} Jam</td>
+            </tr>
+        `));
+
+    } else if (type === 'expected') {
+        header.style.background = 'linear-gradient(135deg, #16a34a 0%, #15803d 100%)';
+        icon.className = 'fas fa-business-time';
+        title.innerText = 'Details Work Hours Seharusnya (Target Standar)';
+        subtitle.innerText = 'Target standar working days dan work hours efektif period ini';
+
+        const expected = summary.expected_hours || 152;
+        const workDays = summary.work_days_count || Math.round(expected / 8);
+
+        const empMap = {};
+        logs.forEach(l => {
+            const empId = l.employee_id || l.employee_name;
+            if (!empMap[empId]) {
+                empMap[empId] = {
+                    name: l.employee_name || 'Karyawan',
+                    position: l.position_name || l.department_name || '-',
+                    actualHours: 0
+                };
+            }
+            empMap[empId].actualHours += parseFloat(l.calculated_work_hours || 0);
+        });
+
+        const empList = Object.values(empMap);
+
+        statBanner.innerHTML = `
+            <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; padding: 16px; margin-bottom: 14px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+                    <div>
+                        <span style="font-size: 11px; color: #166534; font-weight: 700; text-transform: uppercase;">Formula Standar Working Days</span>
+                        <h4 style="margin: 2px 0 0 0; font-size: 18px; font-weight: 800; color: #14532d;">
+                            ${workDays} Working Days Efektif × 8 Jam = ${expected} Jam / Karyawan
+                        </h4>
+                    </div>
+                    <span style="background: #dcfce7; color: #15803d; font-weight: 700; padding: 6px 14px; border-radius: 8px; font-size: 13px;">
+                        Target Standar This Month
+                    </span>
+                </div>
+                <p style="margin: 8px 0 0 0; font-size: 12.5px; color: #166534; line-height: 1.4;">
+                    Target ini dihitung dari amount hari efektif kerja (mengabaikan akhir pekan dan libur nasional) dikalikan standar 8 work hours harian.
+                </p>
+            </div>
+        `;
+
+        thead.innerHTML = `
+            <tr style="background: #f8fafc; border-bottom: 2px solid #e2e8f0; color: #475569;">
+                <th style="padding: 12px 14px; text-align: left; font-weight: 700;">No</th>
+                <th style="padding: 12px 14px; text-align: left; font-weight: 700;">Employee Name</th>
+                <th style="padding: 12px 14px; text-align: left; font-weight: 700;">Position / Department</th>
+                <th style="padding: 12px 14px; text-align: right; font-weight: 700;">Target Jam</th>
+                <th style="padding: 12px 14px; text-align: right; font-weight: 700;">Realisasi Jam</th>
+                <th style="padding: 12px 14px; text-align: center; font-weight: 700;">Persentase Pemenuhan</th>
+            </tr>
+        `;
+
+        renderAttDetailTableRows(empList.map((e, idx) => {
+            const pct = expected > 0 ? Math.min(100, Math.round((e.actualHours / expected) * 100)) : 0;
+            const badgeBg = pct >= 100 ? '#f0fdf4' : (pct >= 80 ? '#fffbe6' : '#fef2f2');
+            const badgeColor = pct >= 100 ? '#16a34a' : (pct >= 80 ? '#d97706' : '#dc2626');
+
+            return `
+                <tr class="att-detail-row" data-search="${e.name.toLowerCase()} ${e.position.toLowerCase()}" style="border-bottom: 1px solid #f1f5f9;">
+                    <td style="padding: 10px 14px;">${idx + 1}</td>
+                    <td style="padding: 10px 14px; font-weight: 600; color: #1e293b;">${e.name}</td>
+                    <td style="padding: 10px 14px; color: #64748b;">${e.position}</td>
+                    <td style="padding: 10px 14px; text-align: right; font-weight: 600;">${expected} Jam</td>
+                    <td style="padding: 10px 14px; text-align: right; font-weight: 700; color: #14532d;">${e.actualHours.toFixed(1)} Jam</td>
+                    <td style="padding: 10px 14px; text-align: center;">
+                        <span style="background: ${badgeBg}; color: ${badgeColor}; font-weight: 800; padding: 3px 10px; border-radius: 6px; font-size: 12px;">
+                            ${pct}%
+                        </span>
+                    </td>
+                </tr>
+            `;
+        }));
+
+    } else if (type === 'tenure') {
+        header.style.background = 'linear-gradient(135deg, #9333ea 0%, #7e22ce 100%)';
+        icon.className = 'fas fa-history';
+        title.innerText = 'Details Akumulasi Tenure Karyawan';
+        subtitle.innerText = 'Average dan total durasi tenure karyawan hingga period ini';
+
+        const tenureList = (summary.tenure_details && summary.tenure_details.length > 0) 
+            ? summary.tenure_details 
+            : [];
+
+        const avgTenure = summary.avg_tenure_months || 0;
+        const maxTenure = summary.max_tenure_months || 0;
+
+        statBanner.innerHTML = `
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; background: #faf5ff; border: 1px solid #e9d5ff; border-radius: 12px; padding: 14px 18px;">
+                <div>
+                    <span style="font-size: 11px; color: #6b21a8; font-weight: 700; text-transform: uppercase;">Average Tenure</span>
+                    <h4 style="margin: 2px 0 0 0; font-size: 20px; font-weight: 800; color: #581c87;">${avgTenure} Month</h4>
+                </div>
+                <div>
+                    <span style="font-size: 11px; color: #6b21a8; font-weight: 700; text-transform: uppercase;">Tenure Tertinggi</span>
+                    <h4 style="margin: 2px 0 0 0; font-size: 20px; font-weight: 800; color: #7e22ce;">${maxTenure} Month</h4>
+                </div>
+                <div>
+                    <span style="font-size: 11px; color: #6b21a8; font-weight: 700; text-transform: uppercase;">Total Employees Terdaftar</span>
+                    <h4 style="margin: 2px 0 0 0; font-size: 20px; font-weight: 800; color: #9333ea;">${tenureList.length} Karyawan</h4>
+                </div>
+            </div>
+        `;
+
+        thead.innerHTML = `
+            <tr style="background: #f8fafc; border-bottom: 2px solid #e2e8f0; color: #475569;">
+                <th style="padding: 12px 14px; text-align: left; font-weight: 700;">No</th>
+                <th style="padding: 12px 14px; text-align: left; font-weight: 700;">Employee Name</th>
+                <th style="padding: 12px 14px; text-align: left; font-weight: 700;">NIK & Position</th>
+                <th style="padding: 12px 14px; text-align: center; font-weight: 700;">Join Date</th>
+                <th style="padding: 12px 14px; text-align: center; font-weight: 700;">Tipe Perjanjian</th>
+                <th style="padding: 12px 14px; text-align: right; font-weight: 700;">Akumulasi Tenure</th>
+            </tr>
+        `;
+
+        if (tenureList.length === 0) {
+            const empMap = {};
+            logs.forEach(l => {
+                const empId = l.employee_id || l.employee_name;
+                if (!empMap[empId]) {
+                    empMap[empId] = {
+                        nama: l.employee_name || 'Karyawan',
+                        nik: l.nik || '-',
+                        position_name: l.position_name || '-',
+                        tgl_masuk: l.tgl_masuk || l.start_contract || '-',
+                        tipe_perjanjian: l.tipe_perjanjian || 'PKWT',
+                        tenure_months: avgTenure
+                    };
+                }
+            });
+            Object.values(empMap).forEach(e => tenureList.push(e));
+        }
+
+        renderAttDetailTableRows(tenureList.map((e, idx) => {
+            const m = parseInt(e.tenure_months || 0);
+            const yrs = Math.floor(m / 12);
+            const rM = m % 12;
+            let tenureText = `${m} Month`;
+            if (yrs > 0) {
+                tenureText = `${yrs} Thn ${rM} Bln (${m} Bln)`;
+            }
+
+            return `
+                <tr class="att-detail-row" data-search="${e.nama.toLowerCase()} ${(e.nik||'').toLowerCase()} ${(e.position_name||'').toLowerCase()}" style="border-bottom: 1px solid #f1f5f9;">
+                    <td style="padding: 10px 14px;">${idx + 1}</td>
+                    <td style="padding: 10px 14px; font-weight: 600; color: #1e293b;">${e.nama}</td>
+                    <td style="padding: 10px 14px; color: #64748b;">${e.nik !== '-' ? e.nik + ' - ' : ''}${e.position_name}</td>
+                    <td style="padding: 10px 14px; text-align: center; color: #475569;">${e.tgl_masuk}</td>
+                    <td style="padding: 10px 14px; text-align: center;"><span style="background: #f3f4f6; color: #374151; font-weight: 700; padding: 2px 8px; border-radius: 4px; font-size: 11px;">${e.tipe_perjanjian || 'PKWT'}</span></td>
+                    <td style="padding: 10px 14px; text-align: right; font-weight: 700; color: #581c87;">${tenureText}</td>
+                </tr>
+            `;
+        }));
+    }
+
+    modal.style.display = 'flex';
+}
+
+function renderAttDetailTableRows(rowsHtmlArray) {
+    const tbody = document.getElementById('modalAttDetailTbody');
+    if (!tbody) return;
+
+    if (!rowsHtmlArray || rowsHtmlArray.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 30px; color: #94a3b8;">No data available details untuk ditampilkan.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = rowsHtmlArray.join('');
+}
+
+function filterAttDetailRows() {
+    const query = document.getElementById('searchAttDetailInput').value.toLowerCase().trim();
+    document.querySelectorAll('.att-detail-row').forEach(row => {
+        const searchData = row.dataset.search || '';
+        if (query === '' || searchData.includes(query)) {
+            row.style.display = '';
+        } else {
+            row.style.display = 'none';
+        }
+    });
+}
+
+function closeAttendanceCardDetailModal() {
+    const modal = document.getElementById('modalAttendanceCardDetail');
+    if (modal) modal.style.display = 'none';
+}
+
+window.showAttendanceSummaryDetail = showAttendanceSummaryDetail;
+window.closeAttendanceCardDetailModal = closeAttendanceCardDetailModal;
+window.filterAttDetailRows = filterAttDetailRows;
+

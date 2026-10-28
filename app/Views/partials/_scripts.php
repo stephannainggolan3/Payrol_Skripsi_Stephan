@@ -1,0 +1,55 @@
+    <script>
+        const BASE_URL = "<?= base_url() ?>";
+        const API_URL = BASE_URL + 'index.php/api';
+        window.API = API_URL;
+    </script>
+    <!-- TomSelect for searchable dropdowns -->
+    <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+    
+    <!-- SheetJS for client-side Excel (.xlsx) export -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script>
+        window.XLSXReader = window.XLSX;
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+    <script>
+        window.XLSXStyle = window.XLSX;
+        window.XLSX = window.XLSXReader;
+    </script>
+    
+    <!-- html2pdf.js for client-side PDF export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    
+    <!-- Core: Global state, helpers, navigation -->
+    <script src="<?= base_url('js/app.js?v=' . time()) ?>"></script>
+    <!-- Domain Modules -->
+    <script src="<?= base_url('js/modules/app-client.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-payroll-scheme.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-payroll-scheme-templates.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-tax.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-tax-edu.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-compensation.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-workspace.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-pkwt.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-contract-compensation.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-process.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-umr.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-employee.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-schedule.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-holiday.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-attendance.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-overtime.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-early-arrival.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-shift.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-fpk.js?v=' . time()) ?>"></script>
+    <!-- Chart.js for data visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    
+    <script src="<?= base_url('js/modules/app-ai-assistant.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/modules/app-report.js?v=' . time()) ?>"></script>
+    <!-- Existing separate modules -->
+    <script src="<?= base_url('js/app-org.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/app-global-sto.js?v=' . time()) ?>"></script>
+    <script src="<?= base_url('js/app-location.js?v=' . time()) ?>"></script>
+
